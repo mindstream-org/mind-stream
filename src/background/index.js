@@ -20,6 +20,7 @@ const DEFAULT_CYCLE = {
   cycle_status: CYCLE_STATUS.IDLE,
   cycle_started_at: null,
   job_id: null,
+  clip_path: null,
   reel_url: null,
   emotion_label: null,
   error_message: null,
@@ -77,10 +78,10 @@ async function startCheckInCycle() {
       await chrome.windows.update(cycle.capture_window_id, { focused: true });
       return;
     }
-    // If a job is already submitted (capture window closed, generation running),
-    // block new check-ins and show the side panel's "generating" view instead.
-    if (cycle.job_id) {
-      console.log("[mindstream] generation already in progress (job_id:", cycle.job_id, ") — opening side panel");
+    // If a clip has been saved or a job is running, block new check-ins
+    // and show the side panel's "processing" view instead.
+    if (cycle.job_id || cycle.clip_path) {
+      console.log("[mindstream] processing already in progress — opening side panel");
       await openSidePanel();
       return;
     }
@@ -96,6 +97,7 @@ async function startCheckInCycle() {
     cycle_status: CYCLE_STATUS.PENDING,
     cycle_started_at: new Date().toISOString(),
     job_id: null,
+    clip_path: null,
     error_message: null,
   });
 
@@ -118,18 +120,21 @@ async function startCheckInCycle() {
  * Self-heals the "user just clicked the window's close button" case: if
  * the capture window disappears before anything was ever submitted, the
  * cycle would otherwise be stuck showing "pending" forever with no way to
- * start over. If it closes *after* submission (job_id is set), that's the
- * normal/expected close — leave the cycle alone and let job polling continue.
+ * start over. If it closes *after* the clip was saved (clip_path is set)
+ * or a job was submitted (job_id is set), that's the normal/expected
+ * close — leave the cycle alone and let processing continue.
  */
 chrome.windows.onRemoved.addListener(async (windowId) => {
   const cycle = await getCycle();
   if (cycle.capture_window_id !== windowId) return;
 
-  if (cycle.cycle_status === CYCLE_STATUS.PENDING && !cycle.job_id) {
+  if (cycle.cycle_status === CYCLE_STATUS.PENDING && !cycle.job_id && !cycle.clip_path) {
     console.log("[mindstream] capture window closed before submitting anything — resetting to idle");
     await setCycle({ cycle_status: CYCLE_STATUS.IDLE, capture_window_id: null, cycle_started_at: null });
     chrome.alarms.clear(ALARM_NAMES.JOB_POLL);
   } else {
+    // Normal close — clip was saved or job is running. Clear the window
+    // id but keep the cycle in PENDING so the sidebar shows "processing".
     await setCycle({ capture_window_id: null });
   }
 });
@@ -192,6 +197,11 @@ function createReadyNotification() {
 async function handleJobPoll() {
   const cycle = await getCycle();
   if (cycle.cycle_status !== CYCLE_STATUS.PENDING || !cycle.job_id) {
+    // No active backend job to poll. If a clip is saved but no job_id,
+    // the friend's emotion-detection workflow hasn't responded yet —
+    // nothing for us to poll. The alarm stays alive in case a job_id
+    // appears later; it'll just no-op each tick.
+    if (!cycle.job_id) return;
     chrome.alarms.clear(ALARM_NAMES.JOB_POLL);
     return;
   }
@@ -264,6 +274,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       capture_window_id: null,
       cycle_started_at: null,
       job_id: null,
+      clip_path: null,
     }).then(() => sendResponse({ ok: true }));
     return true;
   }
@@ -277,8 +288,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       capture_window_id: null,
       cycle_started_at: null,
       job_id: null,
+      clip_path: null,
       error_message: null,
     }).then(() => sendResponse({ ok: true }));
+    return true;
+  }
+
+  if (message?.type === MESSAGE_TYPES.CLIP_SAVED) {
+    // The capture window saved the clip to disk — record the path so the
+    // sidebar can show "processing" and the onRemoved listener knows not
+    // to reset the cycle when the capture window closes.
+    setCycle({ clip_path: message.clipPath }).then(() => sendResponse({ ok: true }));
     return true;
   }
 });

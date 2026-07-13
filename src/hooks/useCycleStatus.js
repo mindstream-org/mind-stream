@@ -6,6 +6,7 @@ const DEFAULT_CYCLE = {
   cycle_status: CYCLE_STATUS.IDLE,
   cycle_started_at: null,
   job_id: null,
+  clip_path: null,
   reel_url: null,
   emotion_label: null,
   error_message: null,

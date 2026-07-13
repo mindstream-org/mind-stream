@@ -35,6 +35,7 @@ export const MESSAGE_TYPES = {
   START_CHECKIN: "START_CHECKIN",
   CANCEL_CHECKIN: "CANCEL_CHECKIN",
   CANCEL_GENERATION: "CANCEL_GENERATION",
+  CLIP_SAVED: "CLIP_SAVED",
 };
 
 export const CAPTURE_WINDOW = {
@@ -79,6 +80,12 @@ export const API_ROUTES = {
   CHECK_IN: `${API_BASE}/check-in`,
   JOB_STATUS: (jobId) => `${API_BASE}/jobs/${jobId}`,
 };
+
+// --- Capture handoff -----------------------------------------------------
+// Subfolder inside the user's default Downloads directory where captured
+// clips are saved.  The friend's AI/ML emotion-detection script watches
+// this folder for new .webm files.
+export const CAPTURE_FOLDER = "mindstream_captures";
 
 // --- Emotion categories ---------------------------------------------------
 // Keep this small and high-confidence per the open question in the project

@@ -31,8 +31,13 @@ export function useCameraCapture({ durationMs = CAPTURE_DURATION_MS } = {}) {
     // Clear the srcObject on the video element too — without this the
     // browser/OS can keep reporting the camera as "in use" (the GNOME
     // top-panel camera icon stays visible until the tab/window closes).
+    // pause() + load() forces the element to fully release the media
+    // resource, which nudges Chrome/Linux into dropping the V4L2 handle
+    // that keeps the OS-level camera indicator lit.
     if (videoRef.current) {
+      videoRef.current.pause();
       videoRef.current.srcObject = null;
+      videoRef.current.load();
     }
   }, []);
 

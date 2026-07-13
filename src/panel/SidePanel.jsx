@@ -39,6 +39,7 @@ export default function SidePanel() {
     setCycle({
       cycle_status: CYCLE_STATUS.IDLE,
       job_id: null,
+      clip_path: null,
       reel_url: null,
       emotion_label: null,
     });
@@ -71,7 +72,7 @@ export default function SidePanel() {
     <PanelShell state={panelState}>
       {panelState === PANEL_STATE.IDLE && <IdleState onAccept={handleAcceptCheckIn} onDismiss={handleDismissPrompt} />}
       {panelState === PANEL_STATE.PENDING && (
-        <PendingState hasJobId={!!cycle.job_id} onCancel={handleCancelGeneration} />
+        <PendingState hasJobId={!!cycle.job_id} hasClipSaved={!!cycle.clip_path} onCancel={handleCancelGeneration} />
       )}
       {panelState === PANEL_STATE.READY && (
         <ReadyState emotionLabel={cycle.emotion_label ?? "neutral"} onPlay={handlePlay} onLater={handleLater} />

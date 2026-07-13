@@ -4,7 +4,7 @@ import ProgressBar from "../../components/ui/ProgressBar.jsx";
 export default function PlayerState({ reelUrl, caption, onDone }) {
   return (
     <div className="flex flex-col animate-fadein">
-      <div className="w-full aspect-[9/13] rounded-[14px] border border-hairline bg-[linear-gradient(200deg,#233A38,#101615)] relative overflow-hidden flex flex-col justify-end mb-3.5">
+      <div className="w-full aspect-9/13 rounded-[14px] border border-hairline bg-[linear-gradient(200deg,#233A38,#101615)] relative overflow-hidden flex flex-col justify-end mb-3.5">
         <div className="absolute top-3 left-3 right-3 flex items-center justify-between">
           <span className="font-mono text-[11px] text-white/75">0:04 / 0:11</span>
           <button onClick={onDone} className="font-mono text-[11px] text-white/75" aria-label="Close">

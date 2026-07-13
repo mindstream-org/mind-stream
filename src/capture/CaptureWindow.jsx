@@ -7,7 +7,7 @@ import CountdownState from "../panel/states/CountdownState.jsx";
 import Button from "../components/ui/Button.jsx";
 import { useCameraCapture } from "../hooks/useCameraCapture.js";
 import { useCycleStatus } from "../hooks/useCycleStatus.js";
-import { submitCheckIn } from "../lib/checkIn.js";
+import { saveCapture } from "../lib/checkIn.js";
 import { sendMessage } from "../lib/chromeApi.js";
 import { MESSAGE_TYPES, PANEL_STATE } from "../lib/constants.js";
 
@@ -26,6 +26,10 @@ export default function CaptureWindow() {
   const startedRef = useRef(false);
   const [confirmed, setConfirmed] = useState(false);
   const [countdownProgress, setCountdownProgress] = useState(null);
+  // Stores the save promise so handleCountdownComplete can wait for it
+  // before tearing the window down — avoids a race where the countdown
+  // finishes before the clip is fully written to disk.
+  const savePromiseRef = useRef(null);
 
   // Single trigger point — no side panel to race against here.
   useEffect(() => {
@@ -40,8 +44,13 @@ export default function CaptureWindow() {
   // sure the camera stream actually stops rather than lingering — that's
   // what leaves the OS-level "camera in use" indicator stuck on.
   useEffect(() => {
-    window.addEventListener("pagehide", camera.stopStream);
-    return () => window.removeEventListener("pagehide", camera.stopStream);
+    const cleanup = () => camera.stopStream();
+    window.addEventListener("pagehide", cleanup);
+    window.addEventListener("beforeunload", cleanup);
+    return () => {
+      window.removeEventListener("pagehide", cleanup);
+      window.removeEventListener("beforeunload", cleanup);
+    };
   }, [camera.stopStream]);
 
   useEffect(() => {
@@ -51,9 +60,16 @@ export default function CaptureWindow() {
 
   const handleAccept = async () => {
     setConfirmed(true);
-    camera.stopStream(); // ensure camera is released before we submit
-    const result = await submitCheckIn(camera.blob);
-    await setCycle({ job_id: result?.job_id ?? null });
+    camera.stopStream(); // ensure camera is released before we save
+
+    // Save the clip to disk and notify background — the promise is stored
+    // so handleCountdownComplete can await it before closing the window.
+    savePromiseRef.current = (async () => {
+      const clipPath = await saveCapture(camera.blob);
+      if (clipPath) {
+        await sendMessage({ type: MESSAGE_TYPES.CLIP_SAVED, clipPath });
+      }
+    })();
   };
 
   const handleDecline = async () => {
@@ -62,8 +78,14 @@ export default function CaptureWindow() {
     window.close();
   };
 
-  const handleCountdownComplete = () => {
+  const handleCountdownComplete = async () => {
     camera.stopStream(); // safety net — release camera before closing
+    // Wait for the save to finish before tearing the window down.
+    // Saving a 3s webm is fast (< 100ms typically), but this guards
+    // against the countdown winning a race with a slow disk.
+    if (savePromiseRef.current) {
+      await savePromiseRef.current;
+    }
     window.close();
   };
 
