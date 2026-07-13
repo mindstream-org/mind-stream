@@ -1,0 +1,78 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------
+   Design tokens — the "film-strip" system from the side panel mockup.
+   Defining these in @theme makes Tailwind generate matching utilities
+   automatically: bg-ink, text-teal, border-hairline, font-mono, etc.
+--------------------------------------------------------------------- */
+@theme {
+  --color-ink: #14171a;
+  --color-panel: #1b1f23;
+  --color-panel-raised: #23282d;
+  --color-hairline: #2e343a;
+
+  --color-teal: #4ebfb3;
+  --color-teal-soft: rgba(78, 191, 179, 0.14);
+
+  --color-amber: #ffb454;
+  --color-amber-soft: rgba(255, 180, 84, 0.14);
+
+  --color-coral: #e8735f;
+  --color-coral-soft: rgba(232, 115, 95, 0.14);
+
+  --color-fog: #8a93a0;
+  --color-fog-dim: #5c6570;
+  --color-paper: #f2f4f6;
+
+  --font-sans: "Inter", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+
+  --animate-breathe: breathe 3.2s ease-in-out infinite;
+  --animate-shimmer: shimmer 1.6s linear infinite;
+  --animate-blink: blink 1s step-start infinite;
+  --animate-fadein: fadein 0.35s ease;
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.7;
+  }
+  50% {
+    transform: scale(1.5);
+    opacity: 1;
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: 150% 0;
+  }
+  100% {
+    background-position: -50% 0;
+  }
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0.2;
+  }
+}
+
+@keyframes fadein {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
