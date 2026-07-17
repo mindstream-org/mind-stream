@@ -1,71 +1,50 @@
 #!/bin/bash
-# MindStream Phase 3 — Reel Generator Test
-#
-# Usage:
-#   ./test.sh                  # Run with default sample (data/sample_emotion_result.json)
-#   ./test.sh --emotion anxious --context '{"active_tab_category":"social_media",...}'
-#
-# How it works:
-#   Phase 1 (Extension) captures browser context → POST /check-in
-#   Phase 2 (Friend's script) detects emotion → writes _result.json
-#   server.js combines them → spawns this script with --job-id --emotion --context
-#
-# This test simulates that combined output.
+# Quick test script for reel generator
 
-set -e
-
-echo "MindStream Phase 3 — Reel Generator Test"
+echo "MindStream Reel Generator Test"
+echo "==============================="
 echo ""
 
-# --- Python check ---
+# Check Python
 if ! command -v python3 &> /dev/null; then
-    echo "ERROR: Python 3 not found"
+    echo "❌ Python 3 not found"
     exit 1
 fi
 
-# --- Venv setup ---
+# Check venv
 if [ ! -d "venv" ]; then
     echo "Creating virtual environment..."
     python3 -m venv venv
 fi
 
+# Activate
 source venv/bin/activate
 
+# Install deps
 echo "Installing dependencies..."
 pip install -q -r requirements.txt 2>/dev/null
 
-# # --- API keys (set via env or use defaults) ---
-# if [ -z "$GEMINI_API_KEY" ]; then
-#     echo "Using default GEMINI_API_KEY"
-#     export GEMINI_API_KEY='AIzaSyBNyFh2UyLRRtBCK2P0pqr629bKPj9zWE4'
-# fi
-
-# if [ -z "$PEXELS_API_KEY" ]; then
-#     echo "Using default PEXELS_API_KEY"
-#     export PEXELS_API_KEY='6Vta0QamMfVjjdTA8vg2AhdKrFGDBIs7SdFLYT2cnDWvSQqki3xeuU2v'
-# fi
-
-# echo ""
-
-# --- Run ---
-if [ $# -gt 0 ]; then
-    # Custom args passed — forward to reel_generator.py
-    echo "Running with custom args: $@"
-    python reel_generator.py "$@"
-else
-    # No args — run with default sample data
-    echo "Running with default sample: data/sample_emotion_result.json"
-    # echo "(Edit this file to change emotion/context)"
-    echo ""
-    python reel_generator.py
+# Check and set default API keys if not present
+if [ -z "$GEMINI_API_KEY" ]; then
+    echo "🔑 Using default GEMINI_API_KEY"
+    export GEMINI_API_KEY='AQ.Ab8RN6LPTpCWct4ApZgO7wMwSAVxG1LMQC8jS6ntoc6TGh97Ig'
 fi
 
-echo ""
+if [ -z "$PEXELS_API_KEY" ]; then
+    echo "🔑 Using default PEXELS_API_KEY"
+    export PEXELS_API_KEY='REDACTED_PEXELS_KEY'
+fi
 
-# --- Check result ---
+# Run test
+echo ""
+echo "Running reel generator..."
+python reel_generator.py
+
 if [ $? -eq 0 ]; then
-    echo "SUCCESS — reel saved to output/reels/"
+    echo ""
+    echo "✅ Success! Play with:"
+    echo "   mpv output/reels/sample-job-001.mp4"
 else
-    echo "FAILED — check errors above"
-    exit 1
+    echo ""
+    echo "❌ Failed - check errors above"
 fi

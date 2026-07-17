@@ -1,26 +1,19 @@
 {
-  "job_id": "sample-job-002",
+  "job_id": "sample-job-001",
+  "captured_at": "2026-07-17T20:50:00.000+05:45",
   "emotion": {
-    "label": "distracted",
-    "confidence": 0.75
+    "label": "frustrated",
+    "confidence": 0.82
   },
   "context": {
-    "tab_summary": {
-      "total_open": 15,
-      "categories": {
-        "work": 3,
-        "social": 7,
-        "entertainment": 4,
-        "other": 1
-      },
-      "primary_activity": "social",
-      "recent_switches": 12
-    },
-    "current_tab_category": "social",
-    "user_name": "Prashant",
-    "local_weather": "Rainy, 22°C",
-    "time_of_day": "night",
-    "session_duration_minutes": 25,
-    "idle_minutes_since_last_activity": 1
+    "active_tab_category": "entertainment",
+    "time_of_day": "evening",
+    "session_duration_minutes": 47,
+    "idle_minutes_since_last_activity": 2
+  },
+  "metadata": {
+    "faces_detected": 1,
+    "processing_time_ms": 340,
+    "model_version": "phase2-dev"
   }
 }
