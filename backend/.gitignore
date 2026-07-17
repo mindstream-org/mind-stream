@@ -1,0 +1,35 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# Output files (don't commit generated reels/audio)
+output/audio/*.mp3
+output/audio/*.wav
+output/reels/*.mp4
+
+# Keep directories
+!output/audio/.gitkeep
+!output/reels/.gitkeep
+
+# Environment
+.env
+*.env
+
+# API keys
+config.json
+
+# macOS
+.DS_Store
+
+# Test files
+test_*.mp4
+test_*.mp3
