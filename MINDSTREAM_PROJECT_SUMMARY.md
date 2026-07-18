@@ -134,12 +134,15 @@ graph TD
 ## 6. Technology Stack
 
 - **Extension:** React, Vite, Tailwind CSS (v4), Chrome Manifest V3 APIs — `sidePanel` (requires Chrome 141+ for `close()` to self-close the panel after the countdown), `storage`, `alarms`, `notifications`, `downloads`.
-- **Local Backend:** Node.js, Express.js, in-memory job tracking (a plain object/Map keyed by `job_id`), file system watcher (`chokidar`) to monitor the capture folder.
+- **Local Backend:** Node.js, Express.js (`backend/server.js`), in-memory job tracking (plain `jobs` Map keyed by `session_id`/`job_id`), `chokidar` file watcher to detect Phase 2 `_result.json` files.
 - **Emotion Detection (Phase 2):** Python CLI (DeepFace / OpenCV / MediaPipe) via `child_process`, run locally. Outputs a JSON result file alongside the captured clip.
-- **Script Generation (Phase 3):** Google Gemini API — the one component that calls out to the internet.
-- **TTS (Phase 3):** Edge TTS (Microsoft, free, online) or KittenTTS (offline, requires model download ~500MB). Generates WAV audio from script.
-- **Media Rendering (Phase 3):** Python + `MoviePy`/`FFmpeg`, compositing TTS audio + optional captions onto a **pre-built local background video asset** (not generating video from scratch per request).
-- **Asset Library:** A local folder (`assets/`) of background video loops (9:16, 1080x1920), each **paired with matching ambient/background audio**, organized by emotion category (e.g. `frustrated.mp4` + `frustrated.mp3`, `fatigued.mp4` + `fatigued.mp3`, etc.). This is prebuilt once, sourced from stock footage sites, and reused across generations.
+- **Script Generation (Phase 3):** Google Gemini (`gemini-3.5-flash`) — returns a structured JSON payload with `script` (full spoken text) and `subtitles` (array of short display phrases) in a single API call, eliminating the need for a separate transcription step.
+- **TTS (Phase 3):** Xiaomi MiMo API (`mimo-v2.5-tts`, voice `Dean`) via `/v1/chat/completions`. Audio returned as base64-encoded MP3 in the response body — no streaming required.
+- **Subtitle Timing (Phase 3):** Purely local, proportional word-count distribution. Total TTS audio duration (read via `AudioFileClip.duration`) is divided across subtitle phrases proportionally by word count. Subtitles start at 0s with no delay, keeping them synced with the near-zero-latency MiMo TTS. Pause-weighting adds ~15% extra time to phrases ending with sentence punctuation (`.`, `!`, `?`, `…`). No upload to Gemini, no Whisper, no AssemblyAI — free-tier safe.
+- **Subtitle Rendering:** MoviePy `SubtitlesClip` overlaid at vertical position `1700` (bottom ~11% of 1920px frame), font size `80`, uppercase, yellow text (`#FFFF00`) with black 3px stroke.
+- **Video Search:** Pexels API with cinematic/moody query terms extracted by Gemini from the script. Fallback terms (`moody nature`, `dusk calm`, `foggy forest`) used if primary queries return no results.
+- **Media Rendering (Phase 3):** Python + `MoviePy`/`FFmpeg`, compositing Pexels-sourced video clips + Xiaomi MiMo TTS audio + ambient audio (15% volume) + proportional subtitles into a 9:16 (1080×1920) MP4.
+- **Asset Library:** A local folder (`assets/audio/`) of ambient audio tracks organised by emotion. Background videos are fetched dynamically from Pexels per generation (no pre-built video library needed).
 
 ## 7. Detailed Implementation Workflow
 
@@ -234,62 +237,47 @@ graph TD
 **Step-by-Step Process:**
 
 #### 3.1: Script Generation (Gemini API)
-**File:** `backend/workers/script_generator.js` (or Python wrapper)
+**File:** `backend/reel_generator.py` → `generate_script()`  
+**Status: ✅ IMPLEMENTED**
 
-Send to Gemini:
+Gemini (`gemini-3.5-flash`) is prompted with the full personalization context and returns **both** the spoken script and the subtitle phrase list in one call:
+
 ```json
 {
-  "system_prompt": "You are a mindfulness coach. Generate a brief, encouraging script (30-45 seconds when spoken) for a focus reset video. The user is experiencing [emotion]. Consider their context. Be warm, concise, and actionable.",
-  "emotion": "frustrated",
-  "context": {
-    "time_of_day": "evening",
-    "activity": "entertainment browsing",
-    "session_duration": "47 minutes"
-  }
+  "script": "Full continuous TTS-ready text...",
+  "subtitles": [
+    "Short phrase one",
+    "Short phrase two",
+    "..."
+  ]
 }
 ```
 
-Receive from Gemini:
-```json
-{
-  "script": "Take a deep breath. You've been scrolling for a while now, and it's okay to feel frustrated. Evening is winding down—this is your time. Close the tab, stand up, stretch for 30 seconds. You've got this.",
-  "tone": "warm",
-  "duration_estimate_seconds": 38
-}
-```
+The prompt uses: `user_name`, `active_tab_domain`, `active_tab_title`, `active_tab_category`, `session_duration_minutes`, `idle_minutes_since_last_activity`, `time_of_day`, `local_weather`, and `emotion` to craft an intimate, highly personalised reflection — **no fallback/generic script**. If Gemini fails, the pipeline raises an exception and the job status is set to `failed`.
 
 #### 3.2: Text-to-Speech Generation
-**File:** `backend/workers/tts_generator.py`
+**File:** `backend/reel_generator.py` → `generate_tts()`  
+**Status: ✅ IMPLEMENTED**
 
-**Options:**
-1. **Edge TTS (Recommended for MVP):**
-   ```python
-   import edge_tts
-   import asyncio
-   
-   async def generate_tts(text, output_path):
-       voice = "en-US-AriaNeural"  # or choose per emotion
-       communicate = edge_tts.Communicate(text, voice)
-       await communicate.save(output_path)
-   
-   asyncio.run(generate_tts(script, "output/audio.mp3"))
-   ```
-   - ✅ Free, online, good quality
-   - ❌ Requires internet (but so does Gemini)
+**Provider:** Xiaomi MiMo API (`mimo-v2.5-tts`) with voice `Dean` (deep, natural-sounding male voice).
 
-2. **KittenTTS (Offline alternative):**
-   ```python
-   from kittentts import KittenTTS
-   import soundfile as sf
-   
-   model = KittenTTS("KittenML/kitten-tts-mini-0.8")
-   audio = model.generate(text, voice="default")
-   sf.write("output/audio.wav", audio, 24000)
-   ```
-   - ✅ Offline, no API limits
-   - ❌ Large model (~500MB download)
+```python
+POST https://api.xiaomimimo.com/v1/chat/completions
 
-**Output:** `output/audio/<job_id>.wav` (or `.mp3`)
+{
+  "model": "mimo-v2.5-tts",
+  "messages": [{"role": "assistant", "content": script}],
+  "audio": {"format": "mp3", "voice": "Dean"}
+}
+
+# Response: choices[0].message.audio.data → base64-encoded MP3
+```
+
+- ✅ No file streaming endpoint — base64 in JSON response body
+- ✅ MP3 written to `output/audio/<job_id>.mp3`
+- ✅ API key configured via `MIMO_API_KEY` env var (hardcoded fallback for dev)
+
+**Output:** `output/audio/<job_id>.mp3`
 
 #### 3.3: Asset Selection
 **File:** `backend/workers/asset_selector.js`
@@ -358,10 +346,16 @@ generate_reel(
 )
 ```
 
-**Optional: Subtitles (defer to post-MVP)**
-- Use `faster-whisper` for local STT
-- Generate SRT file from TTS audio
-- Overlay with `SubtitlesClip` in MoviePy
+**Subtitles: ✅ IMPLEMENTED (proportional local timing)**
+- Gemini returns `subtitles[]` list alongside the script in Step 3.1
+- `AudioFileClip(tts_path).duration` gives total audio length locally
+- Duration distributed across phrases proportionally by word count (not character count)
+- Negative lead offset (-0.15s) ensures subtitles appear slightly before audio
+- Sentence-ending punctuation gets ~15% extra duration for natural pauses
+- SRT written to `output/audio/<job_id>.srt`, loaded by MoviePy `SubtitlesClip`
+- Rendered as uppercase yellow text (`#FFFF00`), font size 80, black 3px stroke
+- Positioned at y=1700 (bottom ~11% of 1920px frame)
+- **No upload to Gemini files API, no Whisper, no AssemblyAI — free-tier safe**
 
 **Output:** `output/reels/<job_id>.mp4`
 
@@ -460,21 +454,25 @@ Extension polls `GET /jobs/:id`, sees `status: "ready"`, fires notification.
 
 ## 8. Open Questions / Decisions Still Needed
 
-- ~~**Side panel auto-close feasibility.**~~ **Resolved:** `chrome.sidePanel.close({ tabId })` (and `{ windowId }`) exists as of **Chrome 141**, so the panel really can close itself right after the "3, 2, 1" countdown — no need to fall back to a minimal idle state on current Chrome.
-- **Failure UX:** on a failed job, does the user get a fallback generic clip, a "something went wrong, try again" notification, or nothing (silent skip)? **Current:** Error notification + reset to idle. Consider adding a fallback generic "take a break" reel later.
-- ~~**Client-side vs. server-side emotion inference:**~~ **Resolved:** Server-side (Phase 2, friend's Python script). Extension just saves the clip to disk, backend handles the rest.
-- **TTS choice:** Edge TTS (online, free, good quality) vs KittenTTS (offline, large model) vs gTTS (simple but robotic)? **Recommended:** Start with Edge TTS for MVP, migrate to KittenTTS if offline capability is needed.
-- **Subtitles:** Include in MVP or defer to post-MVP? **Recommended:** Defer. Script voiceover + calm visuals are sufficient for the core intervention. Subtitles add complexity (STT, timing, overlay) without proportional UX value for a college demo.
-- **Background music volume:** Fixed at 0.2x (20%) or configurable? **Current:** Fixed at 0.2x. Gemini could potentially recommend a volume level per emotion/script in future iterations.
-- **Asset library sourcing:** Free stock footage (Pexels, Pixabay) or AI-generated (RunwayML, Synthesia)? **Recommended:** Free stock for MVP (faster, no cost). Each emotion needs 1 loopable 60s+ background video + 1 ambient audio track.
-- **Emotion vocabulary:** Constrain to 5 categories (`frustrated`, `fatigued`, `distracted`, `anxious`, `neutral`) matching the asset library. Friend's Phase 2 script must output one of these labels.
+- ~~**Side panel auto-close feasibility.**~~ **Resolved:** `chrome.sidePanel.close({ tabId })` (and `{ windowId }`) exists as of **Chrome 141**, so the panel really can close itself right after the "3, 2, 1" countdown.
+- **Failure UX:** On a failed job the extension fires an error notification and resets the cycle to `idle`. No generic fallback reel — if the script can't be generated, there is nothing meaningful to show.
+- ~~**Client-side vs. server-side emotion inference:**~~ **Resolved:** Server-side (Phase 2, friend's Python script).
+- ~~**TTS choice:**~~ **Resolved:** Xiaomi MiMo API, voice `Dean` (deep, natural male voice). Configured via `MIMO_API_KEY` env var.
+- ~~**Subtitles — defer to post-MVP?**~~ **Resolved:** Subtitles are **included** and generated locally via proportional character-count timing (no STT/transcription). See §7 Phase 3, Step 3.4.
+- **Background music volume:** Fixed at 0.15x (15%). Slightly lower than original 0.2x for a more balanced mix with the Dean voice.
+- ~~**Asset library sourcing:**~~ **Resolved:** Background videos are fetched **dynamically** from Pexels per generation using Gemini-extracted keywords — no pre-built video library needed. Only ambient audio tracks per emotion need to be pre-downloaded to `assets/audio/`.
+- **Emotion vocabulary:** Constrain to 5 categories (`frustrated`, `fatigued`, `distracted`, `anxious`, `neutral`). Friend's Phase 2 script must output one of these labels.
 - **Context telemetry — privacy line:** Current approach collects:
-  - ✅ Active tab *category* (not URL) — high-level like "entertainment", "work", "social"
-  - ✅ Time of day — "morning", "afternoon", "evening"
-  - ✅ Session duration — aggregate minutes
-  - ✅ Idle time — aggregate minutes since last activity
-  - ❌ NOT collecting: full URLs, tab titles, browsing history, keystrokes, mouse movements
-  - **Assessment:** Current telemetry is minimal and defensible for a college portfolio project. Everything stays local except the Gemini API call (which only receives aggregated context, not raw PII).
+  - ✅ Active tab *category* (classified from domain — `entertainment`, `coding`, `social_media`, `research`, `shopping`, `browsing`)
+  - ✅ Active tab *domain* (hostname only, e.g. `youtube.com`)
+  - ✅ Active tab *title* (page title at time of check-in)
+  - ✅ Time of day — `morning` / `afternoon` / `evening`
+  - ✅ Session duration — estimated minutes
+  - ✅ Idle time — estimated minutes since last activity
+  - ✅ User name — hardcoded for demo (`"Prash"`); can be user-configurable via extension options page
+  - ✅ Local weather — hardcoded for demo (`"chilly rain"`); can be fetched from a free weather API using geolocation in future
+  - ❌ NOT collecting: full URLs, browsing history, keystrokes, mouse movements
+  - **Assessment:** Tab title is included now (adds personalisation) but is sent only to the local Gemini API call, not persisted anywhere. Defensible for a college portfolio project.
 - **Reset timing after unviewed "ready" reel:** §4a resets the clock when the user *views* the reel. But if the reminder notification (for a `"ready"` cycle) goes unclicked indefinitely, there's no timeout. **Consider:** Auto-expire unviewed reels back to `"idle"` after 24 hours, so the user isn't permanently stuck unable to get a new check-in.
 - **Gemini prompt engineering:** The system prompt and context formatting will need tuning once we have real emotion data + user context. Initial prompt is in §7.3.1; expect iteration.
 
@@ -496,8 +494,10 @@ Extension polls `GET /jobs/:id`, sees `status: "ready"`, fires notification.
 4. ✅ Capture window (separate popup) with consent flow
 5. ✅ Side panel UI states (idle, processing, ready, player, error)
 6. ✅ Job polling via `chrome.alarms` + notification on completion
+7. ✅ `CLIP_SAVED` handler now gathers active tab context and POSTs to `POST /check-in`, updating cycle with returned `job_id`
+8. ✅ Extended context payload: `active_tab_title`, `user_name`, `local_weather` added to `buildCheckInPayload()`
 
-**Status:** Phase 1 is feature-complete. Minor UX polish deferred until Phase 3 is working end-to-end.
+**Status:** Phase 1 is feature-complete including backend integration handoff.
 
 ---
 
@@ -553,38 +553,38 @@ Extension polls `GET /jobs/:id`, sees `status: "ready"`, fires notification.
 
 ---
 
-**Milestone 4: Express Backend Skeleton**
-- [ ] Create `backend/server.js`
-- [ ] Set up Express with CORS (for extension origin)
-- [ ] Stub `POST /check-in` → returns `{ "job_id": "..." }`
-- [ ] Stub `GET /jobs/:id` → returns `{ "status": "processing" }` (then `"ready"` after 5s delay)
-- [ ] Serve static files from `output/reels/` at `/reels/:filename`
-- [ ] Test with Postman or `curl`
+**Milestone 4: Express Backend Skeleton ✅ COMPLETE**
+- ✅ `backend/server.js` created
+- ✅ Express with CORS set up
+- ✅ `POST /check-in` → accepts context payload, returns `{ job_id }`
+- ✅ `GET /jobs/:id` → returns current job status (`processing_emotion`, `processing_reel`, `ready`, `failed`)
+- ✅ Static files served from `output/reels/` at `/reels/:filename`
+- ✅ `npm install` run — `express`, `cors`, `chokidar` installed
 
-**Success criteria:** Extension can call backend endpoints, polling works, no CORS errors.
-
----
-
-**Milestone 5: Backend File Watcher**
-- [ ] Install `chokidar` (Node file watcher)
-- [ ] Watch `~/Downloads/mindstream_captures/` for new `.webm` files
-- [ ] On new clip: create job entry in `jobMap` (in-memory)
-- [ ] Watch for corresponding `_result.json` from Phase 2
-- [ ] On result file: read emotion data, move job to Phase 3 pipeline
-
-**Success criteria:** Backend detects new clips, creates jobs, waits for Phase 2 result.
+**Success criteria:** ✅ Extension can call backend endpoints, polling works, no CORS errors.
 
 ---
 
-**Milestone 6: Phase 3 Pipeline Integration**
-- [ ] Integrate Gemini script generation (from Milestone 2)
-- [ ] Integrate TTS generation (from Milestone 1)
-- [ ] Integrate asset selection based on emotion
-- [ ] Integrate MoviePy compositor (from Milestone 1)
-- [ ] Update job status to `"ready"` on success, `"failed"` on error
-- [ ] Write output to `output/reels/<job_id>.mp4`
+**Milestone 5: Backend File Watcher ✅ COMPLETE**
+- ✅ `chokidar` watches `~/Downloads/mindstream_captures/` for `_result.json` files
+- ✅ On new result JSON: matches to job by clip path base name
+- ✅ Handles race condition where result arrives before check-in POST completes (via `pendingResults` cache)
+- ✅ On result: reads `emotion.label`, passes to Phase 3 pipeline
 
-**Success criteria:** Backend can generate a reel end-to-end from a clip + emotion result.
+**Success criteria:** ✅ Backend detects result files and dispatches reel generation.
+
+---
+
+**Milestone 6: Phase 3 Pipeline Integration ✅ COMPLETE**
+- ✅ Gemini (`gemini-2.0-flash`) generates personalised script + subtitle list (JSON) in one call
+- ✅ Xiaomi MiMo TTS (`Dean` voice) generates MP3 audio
+- ✅ Pexels API fetches dynamic cinematic video clips based on Gemini-extracted keywords
+- ✅ Proportional local subtitle timing with negative lead offset — no STT/transcription/upload
+- ✅ MoviePy composites clips + TTS + ambient audio + subtitles into 9:16 MP4
+- ✅ Subtitles positioned at y=1700 (bottom of frame), font size 80
+- ✅ Job status updated to `ready` or `failed` accordingly
+
+**Success criteria:** ✅ Backend generates reel end-to-end from check-in payload.
 
 ---
 
