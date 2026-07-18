@@ -1,0 +1,26 @@
+{
+  "job_id": "sample-job-002",
+  "emotion": {
+    "label": "distracted",
+    "confidence": 0.75
+  },
+  "context": {
+    "tab_summary": {
+      "total_open": 15,
+      "categories": {
+        "work": 3,
+        "social": 7,
+        "entertainment": 4,
+        "other": 1
+      },
+      "primary_activity": "social",
+      "recent_switches": 12
+    },
+    "current_tab_category": "social",
+    "user_name": "Prashant",
+    "local_weather": "Rainy, 22°C",
+    "time_of_day": "night",
+    "session_duration_minutes": 25,
+    "idle_minutes_since_last_activity": 1
+  }
+}

@@ -13,6 +13,9 @@ export function buildCheckInPayload({ tabInfo } = {}) {
     context: {
       active_tab_category: tabInfo?.category ?? "unknown",
       active_tab_domain: tabInfo?.domain ?? "unknown",
+      active_tab_title: tabInfo?.title ?? "unknown",
+      user_name: tabInfo?.userName ?? "friend",
+      local_weather: tabInfo?.weather ?? "calm",
       time_of_day: new Date().getHours() < 12 ? "morning" : new Date().getHours() < 18 ? "afternoon" : "evening",
       session_duration_minutes: tabInfo?.sessionDurationMinutes ?? 0,
       idle_minutes_since_last_activity: tabInfo?.idleMinutes ?? 0,
