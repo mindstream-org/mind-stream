@@ -9,6 +9,7 @@ import {
   API_ROUTES,
   CAPTURE_WINDOW,
 } from "../lib/constants.js";
+import { buildCheckInPayload } from "../lib/checkIn.js";
 
 chrome.sidePanel
   .setPanelBehavior({ openPanelOnActionClick: true })
@@ -257,6 +258,44 @@ chrome.notifications.onClicked.addListener(async (notificationId) => {
   }
 });
 
+/** Queries the active tab to extract category, domain, title, and mock personalization variables. */
+async function getActiveTabInfo() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (!tab || !tab.url) return null;
+    
+    const url = new URL(tab.url);
+    const domain = url.hostname;
+    
+    // Simple classifier for college portfolio demo
+    let category = "browsing";
+    if (domain.includes("youtube.com") || domain.includes("netflix.com") || domain.includes("twitch.tv") || domain.includes("tiktok.com")) {
+      category = "entertainment";
+    } else if (domain.includes("github.com") || domain.includes("stackoverflow.com") || domain.includes("developer") || domain.includes("localhost")) {
+      category = "coding";
+    } else if (domain.includes("linkedin.com") || domain.includes("twitter.com") || domain.includes("facebook.com") || domain.includes("instagram.com") || domain.includes("reddit.com")) {
+      category = "social_media";
+    } else if (domain.includes("google.com") || domain.includes("wikipedia.org") || domain.includes("medium.com")) {
+      category = "research";
+    } else if (domain.includes("amazon.com") || domain.includes("ebay.com") || domain.includes("shopify")) {
+      category = "shopping";
+    }
+    
+    return {
+      category,
+      domain,
+      title: tab.title ?? "unknown",
+      userName: "Prash",
+      weather: "chilly rain",
+      sessionDurationMinutes: Math.floor(Math.random() * 45) + 15,
+      idleMinutes: Math.floor(Math.random() * 5)
+    };
+  } catch (e) {
+    console.error("Failed to get active tab info:", e);
+    return null;
+  }
+}
+
 // --- Messages from the panel and the capture window -----------------------
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === MESSAGE_TYPES.START_CHECKIN) {
@@ -295,10 +334,40 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message?.type === MESSAGE_TYPES.CLIP_SAVED) {
-    // The capture window saved the clip to disk — record the path so the
-    // sidebar can show "processing" and the onRemoved listener knows not
-    // to reset the cycle when the capture window closes.
-    setCycle({ clip_path: message.clipPath }).then(() => sendResponse({ ok: true }));
+    // 1. Get active tab info
+    getActiveTabInfo().then(async (tabInfo) => {
+      // 2. Build check-in payload
+      const payload = buildCheckInPayload({ tabInfo });
+      payload.clip_path = message.clipPath;
+      
+      try {
+        console.log("[background] Submitting check-in to server...", payload);
+        // 3. POST payload to the server
+        const response = await fetch(API_ROUTES.CHECK_IN, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(payload)
+        });
+        
+        if (!response.ok) throw new Error(`Check-in request failed with status ${response.status}`);
+        const data = await response.json(); // expected: { job_id }
+        
+        console.log("[background] Check-in submitted, job ID:", data.job_id);
+        
+        // 4. Update the cycle status with job_id and clip_path
+        await setCycle({ clip_path: message.clipPath, job_id: data.job_id });
+      } catch (err) {
+        console.error("[background] Failed to check-in with Express server:", err);
+        await setCycle({
+          cycle_status: CYCLE_STATUS.FAILED,
+          error_message: "Could not connect to the local reel generation server. Make sure it is running on port 4000."
+        });
+      }
+    });
+    
+    sendResponse({ ok: true });
     return true;
   }
 });
