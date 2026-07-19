@@ -43,3 +43,5 @@ backend/output/**/*.mp3
 backend/output/**/*.mp4
 backend/output/**/*.wav
 backend/output/**/*.srt
+
+Video_gen_inspiration_project/

@@ -31,9 +31,22 @@ fi
 
 source venv/bin/activate
 
-echo " Verifying environment..."
+echo "Checking dependencies..."
 pip install -q -r requirements.txt 2>/dev/null || pip install -r requirements.txt 2>/dev/null
-echo -e "\033[92m✓\033[0m Required dependencies found"
+echo -e "\033[92m✓\033[0m Dependencies ready"
+
+# # --- API keys (set via env or use defaults) ---
+# if [ -z "$GEMINI_API_KEY" ]; then
+#     echo "Using default GEMINI_API_KEY"
+#     export GEMINI_API_KEY='REDACTED_GEMINI_KEY'
+# fi
+
+# if [ -z "$PEXELS_API_KEY" ]; then
+#     echo "Using default PEXELS_API_KEY"
+#     export PEXELS_API_KEY='REDACTED_PEXELS_KEY'
+# fi
+
+# echo ""
 
 # --- Run ---
 if [ $# -gt 0 ]; then
