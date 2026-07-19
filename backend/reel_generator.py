@@ -10,6 +10,9 @@ import asyncio
 import requests
 import base64
 import warnings
+import sys
+import time
+import threading
 from typing import List, Dict, Any, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
@@ -64,19 +67,31 @@ class ReelGenerator:
 
     def __init__(self, gemini_key: str = None, pexels_key: str = None, 
                  pixabay_key: str = None, coverr_key: str = None, mimo_key: str = None):
-        # Load API keys from environment or parameters
+        # Load API keys from environment
         self.gemini_key = gemini_key or os.getenv("GEMINI_API_KEY")
+        self.groq_key = os.getenv("GROQ_API_KEY")
         self.pexels_key = pexels_key or os.getenv("PEXELS_API_KEY")
-        self.pixabay_key = pixabay_key or os.getenv("PIXABAY_API_KEY")  # Optional
-        self.coverr_key = coverr_key or os.getenv("COVERR_API_KEY")  # Optional
-        self.mimo_key = mimo_key or os.getenv("MIMO_API_KEY") or "sk-s2v2izgvyp8htvq654ogi2bfph91vzvhyr45pti7wmowp81x"
+        self.pixabay_key = pixabay_key or os.getenv("PIXABAY_API_KEY")
+        self.coverr_key = coverr_key or os.getenv("COVERR_API_KEY")
+        self.mimo_key = mimo_key or os.getenv("MIMO_API_KEY")
 
-        if not self.gemini_key:
-            raise ValueError("GEMINI_API_KEY is required — set it in .env or pass as parameter")
+        # Script model provider selection
+        self.script_provider = os.getenv("SCRIPT_MODEL_PROVIDER", "gemini").lower()
+        self.script_model = os.getenv("SCRIPT_MODEL_NAME", "gemini-2.0-flash-exp")
+
+        # Validate required keys
+        if self.script_provider == "gemini" and not self.gemini_key:
+            raise ValueError("GEMINI_API_KEY required (set in .env)")
+        if self.script_provider == "groq" and not self.groq_key:
+            raise ValueError("GROQ_API_KEY required (set in .env)")
         if not self.pexels_key:
-            raise ValueError("PEXELS_API_KEY is required — get a free key at https://www.pexels.com/api/")
+            raise ValueError("PEXELS_API_KEY required (set in .env)")
+        if not self.mimo_key:
+            raise ValueError("MIMO_API_KEY required (set in .env)")
 
-        self.client = genai.Client(api_key=self.gemini_key)
+        # Initialize clients based on provider
+        if self.script_provider == "gemini":
+            self.client = genai.Client(api_key=self.gemini_key)
 
         # Output directories
         self.output_dir = "output"
@@ -111,8 +126,6 @@ class ReelGenerator:
         idle_time         = context.get("idle_minutes_since_last_activity", 0)
         user_name         = context.get("user_name", "friend")
         local_weather     = context.get("local_weather", "calm")
-
-        print(f"Generating script for emotion: {emotion}")
 
         # Build activity description more generically
         activity_desc = activity
@@ -163,33 +176,53 @@ The subtitles array must contain the ENTIRE script broken into SHORT consecutive
 Every word in the script must appear in exactly one subtitle phrase.
 Do not truncate, summarise, or skip any part of the script."""
 
-        response = self.client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt,
-        )
-
-        raw = response.text.strip()
-
-        # Strip markdown fences if Gemini ignores the instruction
-        if raw.startswith("```"):
-            raw = re.sub(r"^```[a-z]*\n?", "", raw)
-            raw = re.sub(r"\n?```$", "", raw.strip())
-        raw = raw.strip()
+        # Call the appropriate LLM based on provider
+        if self.script_provider == "groq":
+            response = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {self.groq_key}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": self.script_model,
+                    "messages": [
+                        {"role": "system", "content": "You are a wise, warm elder who creates mindfulness scripts in JSON format."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    "temperature": 0.8,
+                    "response_format": {"type": "json_object"}
+                },
+                timeout=30
+            )
+            response.raise_for_status()
+            raw = response.json()["choices"][0]["message"]["content"]
+        else:
+            response = self.client.models.generate_content(
+                model=self.script_model,
+                contents=prompt,
+                config={"temperature": 0.9}
+            )
+            raw = response.text.strip()
+            # Strip markdown fences if the model ignores the instruction
+            if raw.startswith("```"):
+                raw = re.sub(r"^```[a-z]*\n?", "", raw)
+                raw = re.sub(r"\n?```$", "", raw.strip())
+            raw = raw.strip()
 
         data = json.loads(raw)
 
         if "script" not in data or "subtitles" not in data:
-            raise ValueError(f"Gemini JSON missing required keys. Got: {list(data.keys())}")
+            raise ValueError(f"LLM JSON missing required keys. Got: {list(data.keys())}")
 
         script    = data["script"].strip()
         subtitles = [p.strip() for p in data["subtitles"] if p.strip()]
 
         if not script:
-            raise ValueError("Gemini returned an empty script.")
+            raise ValueError("LLM returned an empty script.")
         if not subtitles:
-            raise ValueError("Gemini returned no subtitle phrases.")
+            raise ValueError("LLM returned no subtitle phrases.")
 
-        print(f"Script generated ({len(subtitles)} subtitle phrases)")
         return {"script": script, "subtitles": subtitles}
 
     # -----------------------------------------------------------------------
@@ -198,7 +231,6 @@ Do not truncate, summarise, or skip any part of the script."""
 
     def extract_video_keywords(self, script: str, emotion: str) -> List[str]:
         """Extract 3-5 cinematic/moody video search terms from the script."""
-        print("Extracting video keywords...")
         
         prompt = f"""From this mindfulness script about the emotion "{emotion}", extract 3-5 search terms to find matching stock video footage.
 
@@ -214,18 +246,33 @@ Return ONLY a JSON array of 3-5 strings, e.g.:
 No explanation, no markdown — just the raw JSON array."""
 
         try:
-            response = self.client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt,
-            )
-            text = response.text.strip()
+            if self.script_provider == "groq":
+                response = requests.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {self.groq_key}", "Content-Type": "application/json"},
+                    json={
+                        "model": self.script_model,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "temperature": 0.7
+                    },
+                    timeout=20
+                )
+                response.raise_for_status()
+                text = response.json()["choices"][0]["message"]["content"]
+            else:
+                response = self.client.models.generate_content(
+                    model=self.script_model,
+                    contents=prompt,
+                    config={"temperature": 0.9}
+                )
+                text = response.text.strip()
+            
             text = text.replace("```json", "").replace("```", "").strip()
             keywords = json.loads(text)
             if isinstance(keywords, list) and keywords:
                 return keywords[:5]
         except Exception as e:
             print(f"Keyword extraction failed ({e})")
-            # If Gemini fails, the video search will simply fail gracefully
             return []
 
         return []
@@ -344,8 +391,6 @@ No explanation, no markdown — just the raw JSON array."""
             print("No keywords extracted — cannot download videos")
             return []
         
-        print(f"Downloading videos for {len(keywords)} keywords...")
-        
         def download_single_keyword(i: int, kw: str) -> Optional[str]:
             """Try all sources for a keyword: Pexels → Pixabay → Coverr"""
             url = None
@@ -375,33 +420,43 @@ No explanation, no markdown — just the raw JSON array."""
                 return dest
             return None
         
-        # Download videos in parallel
+        # Download videos in parallel with DNF-style progress
         paths = []
+        completed = 0
+        total = len(keywords)
+        width = 20
+        
         with ThreadPoolExecutor(max_workers=min(4, len(keywords))) as executor:
             futures = {
                 executor.submit(download_single_keyword, i, kw): (i, kw) 
                 for i, kw in enumerate(keywords)
             }
             
-            # Show progress bar with sleek styling
-            with tqdm(
-                total=len(keywords), 
-                desc="Downloading videos",
-                unit="clip",
-                bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]',
-                ncols=100,
-                colour='cyan'
-            ) as pbar:
-                for future in as_completed(futures):
-                    i, kw = futures[future]
-                    try:
-                        result = future.result()
-                        if result:
-                            paths.append(result)
-                    except Exception as e:
-                        pass
-                    pbar.update(1)
-
+            for future in as_completed(futures):
+                i, kw = futures[future]
+                try:
+                    result = future.result()
+                    if result:
+                        paths.append(result)
+                except Exception as e:
+                    pass
+                completed += 1
+                # DNF-style progress bar matching the format of other steps
+                pct = int(100 * completed / total) if total > 0 else 0
+                filled = int(width * completed / total) if total > 0 else 0
+                bar = '━' * filled + ' ' * (width - filled)
+                color = self.CYAN if completed < total else self.GREEN
+                # Format exactly like _progress_bar_dnf with green checkmark prefix
+                desc = f"{'Downloading footage':<25}"
+                if completed >= total:
+                    # Final line with green checkmark
+                    print(f"\r{self.GREEN}✓{self.RESET} {desc}{color}{pct:3d}% |{bar}| {completed}/{total}{self.RESET}", end='', flush=True)
+                else:
+                    # In-progress with spinner (updates per item)
+                    spinner_char = self.BRAILLE_CHARS[completed % len(self.BRAILLE_CHARS)]
+                    print(f"\r{self.CYAN}{spinner_char}{self.RESET} {desc}{color}{pct:3d}% |{bar}| {completed}/{total}{self.RESET}", end='', flush=True)
+        
+        print()  # newline after progress
         # Sort paths by clip number to maintain order
         paths.sort(key=lambda p: int(re.search(r'clip_(\d+)', p).group(1)) if 'clip_' in p else 999)
         
@@ -409,7 +464,6 @@ No explanation, no markdown — just the raw JSON array."""
             print("No videos could be downloaded from any source")
             return []
         
-        print(f"Downloaded {len(paths)} videos")
         return paths
 
     # -----------------------------------------------------------------------
@@ -419,7 +473,6 @@ No explanation, no markdown — just the raw JSON array."""
     async def _generate_tts_async(self, script: str, output_path: str) -> str:
         loop = asyncio.get_event_loop()
         
-        print("Generating TTS audio (MiMo Dean)...")
         
         response = await loop.run_in_executor(
             None,
@@ -451,7 +504,6 @@ No explanation, no markdown — just the raw JSON array."""
     def generate_tts(self, script: str, output_path: str) -> str:
         """Synchronous wrapper around the async MiMo call."""
         asyncio.run(self._generate_tts_async(script, output_path))
-        print(f"TTS audio generated")
         return output_path
 
     # -----------------------------------------------------------------------
@@ -557,35 +609,43 @@ No explanation, no markdown — just the raw JSON array."""
         subtitle_list: List[str],
         ambient_path: Optional[str] = None,
     ) -> str:
-        print("Compositing final reel...")
 
         tts_audio = AudioFileClip(tts_path)
         duration  = tts_audio.duration
 
-        # --- Video clips ---
+        # --- Video clips with single progress bar ---
         time_per_clip = duration / len(video_paths)
         clips = []
         
-        print("Processing video clips...")
-        with tqdm(
-            total=len(video_paths), 
-            desc="Processing clips",
-            unit="clip",
-            bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]',
-            ncols=100,
-            colour='green'
-        ) as pbar:
-            for i, path in enumerate(video_paths):
-                c = VideoFileClip(path)
-                c = self._resize_to_portrait(c)
-                c = c.subclipped(0, min(c.duration, time_per_clip))
-                c = c.with_duration(time_per_clip).with_fps(30)
-                clips.append(c)
-                pbar.update(1)
+        for i, path in enumerate(video_paths):
+            c = VideoFileClip(path)
+            c = self._resize_to_portrait(c)
+            c = c.subclipped(0, min(c.duration, time_per_clip))
+            c = c.with_duration(time_per_clip).with_fps(30)
+            clips.append(c)
+            # Single DNF-style progress bar matching format of other steps
+            pct = int(100 * (i + 1) / len(video_paths))
+            width = 20
+            filled = int(width * (i + 1) / len(video_paths))
+            bar = '━' * filled + ' ' * (width - filled)
+            color = self.CYAN if (i + 1) < len(video_paths) else self.GREEN
+            # Format exactly like _progress_bar_dnf with green checkmark prefix
+            desc = f"{'Processing video clips':<25}"
+            if (i + 1) >= len(video_paths):
+                # Final line with green checkmark
+                print(f"\r{self.GREEN}✓{self.RESET} {desc}{color}{pct:3d}% |{bar}| {i+1}/{len(video_paths)}{self.RESET}", end='', flush=True)
+            else:
+                # In-progress with spinner
+                spinner_char = self.BRAILLE_CHARS[(i + 1) % len(self.BRAILLE_CHARS)]
+                print(f"\r{self.CYAN}{spinner_char}{self.RESET} {desc}{color}{pct:3d}% |{bar}| {i+1}/{len(video_paths)}{self.RESET}", end='', flush=True)
+        
+        print()  # newline after progress bar
+        print(f"{self.GREEN}✓{self.RESET} Video clips processed")
 
         video = concatenate_videoclips(clips, method="compose").with_duration(duration)
 
         # --- Audio (TTS + ambient) ---
+        print(f"{self.GREEN}✓{self.RESET} Mixing audio layers")
         if ambient_path and os.path.exists(ambient_path):
             amb = AudioFileClip(ambient_path)
             if amb.duration < duration:
@@ -594,50 +654,47 @@ No explanation, no markdown — just the raw JSON array."""
                 amb = amb.subclipped(0, duration)
             amb   = amb.with_volume_scaled(0.12)  # 12% volume
             audio = CompositeAudioClip([tts_audio, amb])
-            print("Ambient audio added")
         else:
             audio = tts_audio
 
         video = video.with_audio(audio)
 
         # --- Subtitles ---
-        print("Adding subtitles...")
+        print(f"{self.GREEN}✓{self.RESET} Rendering {len(subtitle_list)} subtitle phrases")
         srt_content = self.build_srt(subtitle_list, duration)
         srt_path    = tts_path.replace(".mp3", ".srt")
         with open(srt_path, "w", encoding="utf-8") as fh:
             fh.write(srt_content)
         video = self._overlay_subtitles(video, srt_path)
 
-        # --- Export with progress indication ---
-        print("Exporting final video (this may take a few minutes)...")
+        # --- Export with spinner at the end ---
+        stop_spinner = False
+        def spinner():
+            idx = 0
+            while not stop_spinner:
+                sys.stdout.write(f'\rEncoding final video (this may take a while) {self.BRAILLE_CHARS[idx % len(self.BRAILLE_CHARS)]}   ')
+                sys.stdout.flush()
+                idx += 1
+                time.sleep(0.1)
+            sys.stdout.write('\r' + ' ' * 70 + '\r')
+            sys.stdout.flush()
         
-        # Use tqdm to show progress during export
-        with tqdm(
-            total=100,
-            desc="Encoding video",
-            unit="%",
-            bar_format='{desc}: {percentage:3.0f}%|{bar}| [{elapsed}<{remaining}]',
-            ncols=100,
-            colour='magenta'
-        ) as pbar:
-            # We'll use a custom logger to track ffmpeg progress
-            def progress_callback(t):
-                if duration > 0:
-                    progress = min(100, int((t / duration) * 100))
-                    pbar.n = progress
-                    pbar.refresh()
-            
-            video.write_videofile(
-                output_path,
-                fps=30,
-                codec="libx264",
-                audio_codec="aac",
-                preset="ultrafast",
-                threads=4,
-                logger=None,  # Suppress MoviePy's verbose ffmpeg logs
-            )
-            pbar.n = 100
-            pbar.refresh()
+        spinner_thread = threading.Thread(target=spinner, daemon=True)
+        spinner_thread.start()
+        
+        video.write_videofile(
+            output_path,
+            fps=30,
+            codec="libx264",
+            audio_codec="aac",
+            preset="ultrafast",
+            threads=os.cpu_count() or 4,
+            logger=None,
+        )
+        
+        stop_spinner = True
+        spinner_thread.join(timeout=0.2)
+        print(f"{self.GREEN}✓{self.RESET} Video encoded successfully")
 
         # Cleanup
         tts_audio.close()
@@ -645,12 +702,47 @@ No explanation, no markdown — just the raw JSON array."""
             c.close()
         video.close()
 
-        print(f"Reel complete: {output_path}")
         return output_path
 
     # -----------------------------------------------------------------------
     # Main pipeline
     # -----------------------------------------------------------------------
+
+    # ANSI color codes for progress bars
+    CYAN = '\033[96m'
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    MAGENTA = '\033[95m'
+    BLUE = '\033[94m'
+    RESET = '\033[0m'
+    BOLD = '\033[1m'
+
+    # Braille spinner for multi-stage loading
+    BRAILLE_CHARS = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+
+    def _print_step(self, step: int, total: int, desc: str):
+        """Print step header in DNF style."""
+        # Separator line removed for cleaner output
+        print(f"[{step}/{total}] {desc}")
+
+    def _progress_bar_dnf(self, current: int, total: int, desc: str, color: str = '') -> str:
+        """Generate DNF-style progress bar with proper vertical alignment."""
+        width = 20
+        percentage = (current / total * 100) if total > 0 else 0
+        filled = int(width * current / total) if total > 0 else 0
+        bar = '━' * filled + ' ' * (width - filled)
+        return f"{desc:<25} {color}{percentage:3.0f}% |{bar}| {current}/{total}{self.RESET}"
+    
+    def _print_with_spinner(self, message: str, stop_flag_name: str = 'stop_spinner'):
+      """Print a message with a braille spinner that updates in place."""
+        idx = 0
+        while not getattr(self, stop_flag_name, True):
+            sys.stdout.write(f'\r{self.BRAILLE_CHARS[idx % len(self.BRAILLE_CHARS)]} {message}')
+            sys.stdout.flush()
+            idx += 1
+            time.sleep(0.1)
+        sys.stdout.write('\r' + ' ' * (len(message) + 10) + '\r')
+        sys.stdout.flush()
 
     def generate_reel(self, job_id: str, emotion: str, context: Dict[str, Any]) -> Dict[str, Any]:
         result: Dict[str, Any] = {
@@ -663,37 +755,77 @@ No explanation, no markdown — just the raw JSON array."""
         }
 
         try:
-            print(f"\nMINDSTREAM REEL — Job {job_id}")
-            print(f"Emotion: {emotion} | User: {context.get('user_name', 'User')}\n")
+            print(f"{job_id} | {emotion.title()} | {context.get('user_name', 'User')}")
 
-            # 1. Script + subtitles
-            print("[1/5] Generating script...")
+            # Step 1: Script generation with multi-stage loader
+            self._print_step(1, 5, "Generating mindfulness script")
+            stop_spinner = False
+            def spinner():
+                idx = 0
+                while not stop_spinner:
+                    sys.stdout.write(f'\r{self.BRAILLE_CHARS[idx % len(self.BRAILLE_CHARS)]} Generating script...')
+                    sys.stdout.flush()
+                    idx += 1
+                    time.sleep(0.1)
+                sys.stdout.write('\r' + ' ' * 50 + '\r')
+                sys.stdout.flush()
+            
+            spinner_thread = threading.Thread(target=spinner, daemon=True)
+            spinner_thread.start()
+            
             script_data   = self.generate_script(emotion, context)
             script        = script_data["script"]
             subtitle_list = script_data["subtitles"]
             result["script"] = script
+            
+            stop_spinner = True
+            spinner_thread.join(timeout=0.2)
+            print(f"{self.GREEN}✓{self.RESET} {self._progress_bar_dnf(1, 1, 'Script generated', self.GREEN)}")
 
-            # 2. Video keywords
-            print("\n[2/5] Extracting video keywords...")
-            keywords          = self.extract_video_keywords(script, emotion)
+            # Step 2: Keyword extraction
+            self._print_step(2, 5, "Extracting cinematic keywords")
+            stop_spinner = False
+            spinner_thread = threading.Thread(target=spinner, daemon=True)
+            spinner_thread.start()
+            
+            keywords = self.extract_video_keywords(script, emotion)
             result["keywords"] = keywords
             if not keywords:
                 raise RuntimeError("Could not extract video keywords from script")
-            print(f"Keywords: {', '.join(keywords)}")
+            
+            stop_spinner = True
+            spinner_thread.join(timeout=0.2)
+            print(f"{self.GREEN}✓{self.RESET} {self._progress_bar_dnf(len(keywords), len(keywords), f'{len(keywords)} keywords extracted', self.GREEN)}")
 
-            # 3. Download videos
-            print("\n[3/5] Downloading videos...")
+            # Step 3: Video download
+            self._print_step(3, 5, "Searching and downloading stock footage")
             video_paths = self.download_videos_for_script(keywords, job_id)
             if not video_paths:
                 raise RuntimeError("No videos could be downloaded")
 
-            # 4. TTS
-            print("\n[4/5] Generating TTS audio...")
+            # Step 4: Audio generation
+            self._print_step(4, 5, "Generating voice narration (MiMo TTS)")
+            stop_spinner = False
+            spinner_thread = threading.Thread(target=spinner, daemon=True)
+            spinner_thread.start()
+            
             tts_path = os.path.join(self.output_dir, "audio", f"{job_id}.mp3")
             self.generate_tts(script, tts_path)
+            
+            stop_spinner = True
+            spinner_thread.join(timeout=0.2)
+            
+            # Calculate audio duration for display
+            try:
+                audio = AudioFileClip(tts_path)
+                duration = int(audio.duration)
+                audio.close()
+                print(f"{self.GREEN}✓{self.RESET} {self._progress_bar_dnf(1, 1, f'Audio generated ({duration}s)', self.GREEN)}")
+            except:
+                print(f"{self.GREEN}✓{self.RESET} {self._progress_bar_dnf(1, 1, 'Audio generated', self.GREEN)}")
 
-            # 5. Composite
-            print("\n[5/5] Compositing reel...")
+            # Step 5: Video compositing
+            self._print_step(5, 5, "Compositing final reel")
             reel_path    = os.path.join(self.output_dir, "reels", f"{job_id}.mp4")
             ambient_path = self.ambient_music.get(emotion, self.ambient_music.get("neutral"))
             self.composite_reel(
@@ -703,6 +835,7 @@ No explanation, no markdown — just the raw JSON array."""
                 subtitle_list=subtitle_list,
                 ambient_path=ambient_path,
             )
+            print(f"{'─' * 100}\n")
 
             result["reel_path"] = reel_path
             result["success"]   = True
@@ -714,11 +847,8 @@ No explanation, no markdown — just the raw JSON array."""
                 except OSError:
                     pass
 
-            print(f"\nCOMPLETE\n")
-
         except Exception as exc:
             result["error"] = str(exc)
-            print(f"\nGeneration failed: {exc}")
             import traceback
             traceback.print_exc()
 
@@ -762,12 +892,16 @@ def main() -> int:
         )
 
     if result["success"]:
-        print(f"\nReel saved to: {result['reel_path']}")
+        # print("\n" + "─" * 76)
+        print("\n✓ Reel generated successfully\n")
+        print("Output:")
+        print(f"  {result['reel_path']}")
         return 0
     else:
-        print(f"\nFailed: {result['error']}", file=sys.stderr)
+        print("\n" + "─" * 76)
+        print("\n✗ Reel generation failed\n", file=sys.stderr)
+        print(f"Error: {result['error']}", file=sys.stderr)
         return 1
-
 
 if __name__ == "__main__":
     import sys
