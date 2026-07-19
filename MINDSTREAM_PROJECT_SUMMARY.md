@@ -583,8 +583,14 @@ Extension polls `GET /jobs/:id`, sees `status: "ready"`, fires notification.
 - ✅ MoviePy composites clips + TTS + ambient audio + subtitles into 9:16 MP4
 - ✅ Subtitles positioned at y=1700 (bottom of frame), font size 80
 - ✅ Job status updated to `ready` or `failed` accordingly
+- ✅ DNF-style progress display with:
+  - Braille spinners (⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏) for active processing
+  - Green checkmarks (✓) for completed steps
+  - Cyan color for in-progress, green for complete
+  - Aligned progress bars (20-char width) across all 5 steps
+  - No separator lines between steps for clean output
 
-**Success criteria:** ✅ Backend generates reel end-to-end from check-in payload.
+**Success criteria:** ✅ Backend generates reel end-to-end from check-in payload with clean, professional terminal output.
 
 ---
 
