@@ -31,8 +31,9 @@ fi
 
 source venv/bin/activate
 
-echo "Installing dependencies..."
-pip install -q -r requirements.txt 2>/dev/null
+echo "Checking dependencies..."
+pip install -q -r requirements.txt 2>/dev/null || pip install -r requirements.txt 2>/dev/null
+echo -e "\033[92m✓\033[0m Dependencies ready"
 
 # # --- API keys (set via env or use defaults) ---
 # if [ -z "$GEMINI_API_KEY" ]; then
@@ -64,8 +65,9 @@ echo ""
 
 # --- Check result ---
 if [ $? -eq 0 ]; then
-    echo "SUCCESS — reel saved to output/reels/"
+    echo ""
 else
+    echo ""
     echo "FAILED — check errors above"
     exit 1
 fi
