@@ -11,19 +11,14 @@ __pycache__/
 dist/
 build/
 
-# Output files (ignore generated content but keep directory structure)
+# Output files (don't commit generated reels/audio)
 output/audio/*.mp3
 output/audio/*.wav
-output/audio/*.srt
 output/reels/*.mp4
-output/temp/*.mp4
-output/temp/*.mp3
-output/temp/*.wav
 
-# Keep directory structure with .gitkeep files
+# Keep directories
 !output/audio/.gitkeep
 !output/reels/.gitkeep
-!output/temp/.gitkeep
 
 # Environment
 .env
@@ -34,3 +29,7 @@ config.json
 
 # macOS
 .DS_Store
+
+# Test files
+test_*.mp4
+test_*.mp3

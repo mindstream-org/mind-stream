@@ -29,19 +29,3 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
-
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-venv/
-.Python
-
-# Backend output (generated files)
-backend/output/**/*.mp3
-backend/output/**/*.mp4
-backend/output/**/*.wav
-backend/output/**/*.srt
-
-Video_gen_inspiration_project/
