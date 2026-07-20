@@ -1,11 +1,15 @@
-# Core
-moviepy>=1.0.3
-Pillow>=10.0.0
+# Core video processing (MovieLite - 4x faster than MoviePy)
+movielite>=0.2.2
+pictex>=0.1.0  # Required for TextClip styling
+
+# Google AI
 google-genai>=1.0.0
+
+# HTTP requests
 requests>=2.31.0
 
 # Environment variables
 python-dotenv>=1.0.0
 
-# Progress indicator (optional, lightweight)
+# Progress indicator
 tqdm>=4.66.0

@@ -14,9 +14,6 @@
 
 set -e
 
-echo "MindStream Phase 3 — Reel Generator Test"
-echo ""
-
 # --- Python check ---
 if ! command -v python3 &> /dev/null; then
     echo "ERROR: Python 3 not found"
@@ -31,9 +28,9 @@ fi
 
 source venv/bin/activate
 
-echo "Checking dependencies..."
+echo "Checking environment..."
 pip install -q -r requirements.txt 2>/dev/null || pip install -r requirements.txt 2>/dev/null
-echo -e "\033[92m✓\033[0m Dependencies ready"
+echo -e "\033[92m✓\033[0m Environment ready"
 
 # # --- API keys (set via env or use defaults) ---
 # if [ -z "$GEMINI_API_KEY" ]; then
