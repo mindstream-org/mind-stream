@@ -35,37 +35,13 @@ warnings.filterwarnings('ignore', message='.*FontNotFoundWarning.*')
 warnings.filterwarnings('ignore', message='.*fontconfig.*')
 warnings.filterwarnings('ignore', message='.*resource_tracker.*')
 import logging
-logging.getLogger('movielite').setLevel(logging.CRITICAL)  # Even more aggressive
-# Suppress all logs from movielite module
+logging.getLogger('movielite').setLevel(logging.ERROR)
 logging.getLogger('movielite').propagate = False
 
-# Redirect stderr temporarily to suppress font warnings
 import contextlib
-import subprocess
-
-@contextlib.contextmanager
-def suppress_stderr():
-    """Context manager to temporarily suppress stderr output."""
-    import sys
-    import os
-    stderr_fd = sys.stderr.fileno()
-    old_stderr = os.dup(stderr_fd)
-    devnull = os.open(os.devnull, os.O_WRONLY)
-    try:
-        os.dup2(devnull, stderr_fd)
-        yield
-    finally:
-        os.dup2(old_stderr, stderr_fd)
-        os.close(devnull)
-        os.close(old_stderr)
-
-# Suppress MovieLite INFO logs (only show errors)
-import logging
-logging.getLogger('movielite').setLevel(logging.ERROR)
 
 # Load environment variables from .env file
 load_dotenv()
-
 
 class ReelGenerator:
     """Complete reel generation pipeline with multi-source video search and ambient audio."""
@@ -113,6 +89,28 @@ class ReelGenerator:
             "anxious":    "assets/audio/anxious.mp3",     # Breathing sounds, soft hum
             "neutral":    "assets/audio/neutral.mp3",     # White noise, minimal drone
         }
+
+    @contextlib.contextmanager
+    def _spinner(self, message: str):
+        """Context manager that shows a braille spinner with the given message."""
+        stop = False
+        def _run():
+            idx = 0
+            while not stop:
+                sys.stdout.write(f'\r{self.BRAILLE_CHARS[idx % len(self.BRAILLE_CHARS)]} {message}')
+                sys.stdout.flush()
+                idx += 1
+                time.sleep(0.1)
+            sys.stdout.write('\r' + ' ' * 50 + '\r')
+            sys.stdout.flush()
+
+        thread = threading.Thread(target=_run, daemon=True)
+        thread.start()
+        try:
+            yield
+        finally:
+            stop = True
+            thread.join(timeout=0.2)
 
     # -----------------------------------------------------------------------
     # Step 1 — Script generation
@@ -621,16 +619,14 @@ No explanation, no markdown — just the raw JSON array."""
         return subtitles
 
     def _create_subtitle_canvas(self) -> Canvas:
-        """Create styled canvas for subtitle text (MovieLite/pictex) with text wrapping."""
+        """Create styled canvas for subtitle text (MovieLite/pictex)."""
         return (
             Canvas()
             .font_family("Poppins")
             .font_size(50)
             .color("#FFFF00")  # Yellow
             .text_shadows(Shadow(offset=(2, 2), blur_radius=3, color="black"))
-            .size(1080, None)  # Full video width (1080px) - text_align center will center it
-            .padding(20)  # 20px padding for safety
-            .text_align("center")  # Center-align text within the full-width canvas
+            .padding(20)
         )
 
     def _resize_to_portrait(self, clip: ml.VideoClip) -> ml.VideoClip:
@@ -714,27 +710,21 @@ No explanation, no markdown — just the raw JSON array."""
         
         # Parse SRT and create TextClip for each subtitle
         subtitle_clips = []
-        # Suppress fontconfig warnings when creating canvas
-        with suppress_stderr():
-            canvas = self._create_subtitle_canvas()
-        
+        canvas = self._create_subtitle_canvas()
+
         for start_time, end_time, text in self.parse_srt(srt_path):
-            # Advance subtitles by 0.2 seconds to appear slightly earlier than audio
-            # This compensates for reading time and feels more natural
             adjusted_start = max(0, start_time - 0.2)
-            adjusted_end = max(adjusted_start + 0.1, end_time - 0.2)  # Ensure min 0.1s duration
-            
+            adjusted_end = max(adjusted_start + 0.1, end_time - 0.2)
+
             text_clip = ml.TextClip(
                 text,
-                start=adjusted_start,  # Adjusted time for better sync
+                start=adjusted_start,
                 duration=adjusted_end - adjusted_start,
                 canvas=canvas
             )
-            
-            # Position subtitles:
-            # Canvas is now full width (1080px), text_align="center" handles horizontal centering
-            # Position at x=0 (left edge), y=1650 (moved up, gives ~270px from bottom)
-            text_clip.set_position((0, 1650))
+
+            text_width = text_clip.size[0]
+            text_clip.set_position(((1080 - text_width) // 2, 1650))
             subtitle_clips.append(text_clip)
         
         print(f"{self.GREEN}✓{self.RESET} Rendering {len(subtitle_clips)} subtitle segments\n")
@@ -742,82 +732,24 @@ No explanation, no markdown — just the raw JSON array."""
         # --- Phase 5: Export ---
         self._print_step(5, 5, "Exporting final video")
         
-        stop_spinner = False
-        def spinner():
-            idx = 0
-            while not stop_spinner:
-                sys.stdout.write(f'\r{self.BRAILLE_CHARS[idx % len(self.BRAILLE_CHARS)]} Exporting...')
-                sys.stdout.flush()
-                idx += 1
-                time.sleep(0.1)
-            sys.stdout.write('\r' + ' ' * 50 + '\r')
-            sys.stdout.flush()
-        
-        spinner_thread = threading.Thread(target=spinner, daemon=True)
-        spinner_thread.start()
-        
-        # Create writer with optimized settings for smooth playback
-        # fps=30 ensures consistent frame rate across all clips
-        # size=(1080, 1920) is standard 9:16 portrait
-        writer = ml.VideoWriter(
-            output_path, 
-            fps=30,  # Fixed 30fps for smooth playback
-            size=(1080, 1920),
-            duration=duration  # Explicit duration prevents timing issues
-        )
-        
-        # Add video clips (sequential concatenation)
-        for clip in processed_clips:
-            writer.add_clip(clip)
-        
-        # Add audio clips (mixed)
-        for audio_clip in audio_clips:
-            writer.add_clip(audio_clip)
-        
-        # Add subtitle clips (overlays)
-        for sub_clip in subtitle_clips:
-            writer.add_clip(sub_clip)
-        
-        # Patch tqdm to prevent MovieLite from showing progress bars
-        try:
-            import tqdm
-            _original_tqdm = tqdm.tqdm
-            _original_tqdm_gui = tqdm.tqdm_gui if hasattr(tqdm, 'tqdm_gui') else None
-            # Replace tqdm with a no-op class
-            class SilentTqdm:
-                def __init__(self, *args, **kwargs):
-                    self.iterable = kwargs.get('iterable', args[0] if args else None)
-                def __iter__(self):
-                    return iter(self.iterable) if self.iterable else iter([])
-                def __enter__(self):
-                    return self
-                def __exit__(self, *args):
-                    pass
-                def update(self, n=1):
-                    pass
-                def close(self):
-                    pass
-            tqdm.tqdm = SilentTqdm
-            if hasattr(tqdm, 'tqdm_gui'):
-                tqdm.tqdm_gui = SilentTqdm
-        except ImportError:
-            _original_tqdm = None
-            _original_tqdm_gui = None
-        
-        # Write video with optimized settings for smooth playback
-        # processes=4: Parallel rendering for speed
-        # video_quality.HIGH: Better quality encoding (reduces artifacts)
-        try:
+        with self._spinner("Exporting..."):
+            # Create writer with optimized settings for smooth playback
+            writer = ml.VideoWriter(
+                output_path, 
+                fps=30,
+                size=(1080, 1920),
+                duration=duration
+            )
+            
+            for clip in processed_clips:
+                writer.add_clip(clip)
+            for audio_clip in audio_clips:
+                writer.add_clip(audio_clip)
+            for sub_clip in subtitle_clips:
+                writer.add_clip(sub_clip)
+            
             writer.write(processes=4, video_quality=ml.VideoQuality.HIGH)
-        finally:
-            # Restore original tqdm
-            if _original_tqdm:
-                tqdm.tqdm = _original_tqdm
-                if _original_tqdm_gui and hasattr(tqdm, 'tqdm_gui'):
-                    tqdm.tqdm_gui = _original_tqdm_gui
         
-        stop_spinner = True
-        spinner_thread.join(timeout=0.2)
         print(f"{self.GREEN}✓{self.RESET} Reel generated successfully")
         
         # Cleanup - MovieLite clips have close() method, but it's optional
@@ -846,7 +778,6 @@ No explanation, no markdown — just the raw JSON array."""
 
     def _print_step(self, step: int, total: int, desc: str):
         """Print step header in DNF style."""
-        # Separator line removed for cleaner output
         print(f"[{step}/{total}] {desc}")
 
     def _progress_bar_dnf(self, current: int, total: int, desc: str, color: str = '') -> str:
@@ -872,27 +803,12 @@ No explanation, no markdown — just the raw JSON array."""
             self._print_step(1, 5, "Generating personalized script")
             print(f"Provider : Gemini ({self.script_model})")
             
-            stop_spinner = False
-            def spinner():
-                idx = 0
-                while not stop_spinner:
-                    sys.stdout.write(f'\r{self.BRAILLE_CHARS[idx % len(self.BRAILLE_CHARS)]} Generating script...')
-                    sys.stdout.flush()
-                    idx += 1
-                    time.sleep(0.1)
-                sys.stdout.write('\r' + ' ' * 50 + '\r')
-                sys.stdout.flush()
+            with self._spinner("Generating script..."):
+                script_data   = self.generate_script(emotion, context)
+                script        = script_data["script"]
+                subtitle_list = script_data["subtitles"]
+                result["script"] = script
             
-            spinner_thread = threading.Thread(target=spinner, daemon=True)
-            spinner_thread.start()
-            
-            script_data   = self.generate_script(emotion, context)
-            script        = script_data["script"]
-            subtitle_list = script_data["subtitles"]
-            result["script"] = script
-            
-            stop_spinner = True
-            spinner_thread.join(timeout=0.2)
             desc = f"{'Script generated':<26}"
             print(f"{self.GREEN}✓{self.RESET} {desc}{self.GREEN}100% |{'━' * 20}| 1/1{self.RESET}\n")
 
@@ -900,19 +816,12 @@ No explanation, no markdown — just the raw JSON array."""
             self._print_step(2, 5, "Finding supporting visuals")
             print(f"Provider : Pexels")
             
-            stop_spinner = False
-            spinner_thread = threading.Thread(target=spinner, daemon=True)
-            spinner_thread.start()
+            with self._spinner("Searching videos..."):
+                keywords = self.extract_video_keywords(script, emotion)
+                result["keywords"] = keywords
+                if not keywords:
+                    raise RuntimeError("Could not extract video keywords from script")
             
-            keywords = self.extract_video_keywords(script, emotion)
-            result["keywords"] = keywords
-            if not keywords:
-                raise RuntimeError("Could not extract video keywords from script")
-            
-            stop_spinner = True
-            spinner_thread.join(timeout=0.2)
-            
-            # Display keywords compactly (truncate long ones)
             def _truncate(kw, maxlen=20):
                 return kw if len(kw) <= maxlen else kw[:maxlen-1] + "…"
             keywords_display = " • ".join(_truncate(kw) for kw in keywords[:4])
@@ -921,21 +830,15 @@ No explanation, no markdown — just the raw JSON array."""
             video_paths = self.download_videos_for_script(keywords, job_id)
             if not video_paths:
                 raise RuntimeError("No videos could be downloaded")
-            print()  # Blank line after phase
+            print()
 
             # Phase 3: TTS generation
             self._print_step(3, 5, "Generating narration")
             print(f"Provider : MiMo (Dean)")
             
-            stop_spinner = False
-            spinner_thread = threading.Thread(target=spinner, daemon=True)
-            spinner_thread.start()
-            
-            tts_path = os.path.join(self.output_dir, "audio", f"{job_id}.mp3")
-            self.generate_tts(script, tts_path)
-            
-            stop_spinner = True
-            spinner_thread.join(timeout=0.2)
+            with self._spinner("Generating narration..."):
+                tts_path = os.path.join(self.output_dir, "audio", f"{job_id}.mp3")
+                self.generate_tts(script, tts_path)
             
             # Calculate audio duration for display
             try:
@@ -983,7 +886,6 @@ No explanation, no markdown — just the raw JSON array."""
 # ---------------------------------------------------------------------------
 
 def main() -> int:
-    import sys
     import argparse
 
     print("MindStream — Phase 3: Reel Generation\n")
@@ -1043,5 +945,4 @@ def main() -> int:
         return 1
 
 if __name__ == "__main__":
-    import sys
     sys.exit(main())
