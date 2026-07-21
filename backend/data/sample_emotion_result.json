@@ -1,26 +1,26 @@
 {
-  "job_id": "sample-job-005",
+  "job_id": "sample-job-001",
   "emotion": {
-    "label": "relaxed",
+    "label": "neutral",
     "confidence": 0.88
   },
   "context": {
     "tab_summary": {
-      "total_open": 9,
+      "total_open": 3,
       "categories": {
         "work": 2,
-        "social": 1,
-        "entertainment": 5,
-        "other": 1
+        "social": 0,
+        "entertainment": 0,
+        "other": 0
       },
-      "primary_activity": "entertainment",
+      "primary_activity": "",
       "recent_switches": 5
     },
-    "current_tab_category": "entertainment",
+    "current_tab_category": "productivity",
     "user_name": "Prashant",
-    "local_weather": "Clear, 24°C",
-    "time_of_day": "morning",
-    "session_duration_minutes": 45,
-    "idle_minutes_since_last_activity": 3
+    "local_weather": "Cloudy, 20°C",
+    "time_of_day": "Evening",
+    "session_duration_minutes": 5,
+    "idle_minutes_since_last_activity": 0
   }
 }
