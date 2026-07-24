@@ -19,6 +19,7 @@ output/reels/*.mp4
 output/temp/*.mp4
 output/temp/*.mp3
 output/temp/*.wav
+output/render_profile_calibration.json
 
 # Keep directory structure with .gitkeep files
 !output/audio/.gitkeep
