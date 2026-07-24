@@ -5,16 +5,28 @@ Pipeline: Script (Gemini JSON) → Videos (Pexels/Pixabay/Coverr) → TTS (MiMo 
 
 # Suppress tqdm progress bars from MovieLite (must be before imports)
 import os
-os.environ['TQDM_DISABLE'] = '1'
+
+os.environ["TQDM_DISABLE"] = "1"
+
+# Limit BLAS/OpenMP threading at import time so numpy doesn't saturate all cores.
+# The preset system overrides ffmpeg threads at runtime, but BLAS threads must be
+# set before OpenBLAS initializes (i.e. before numpy is imported).
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS64_NUM_THREADS", "1")  # scipy_openblas64 uses this
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
 
 import re
 import json
 import asyncio
 import requests
 import base64
+import shutil
 import sys
 import time
 import threading
+from dataclasses import dataclass
 from typing import List, Dict, Any, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
@@ -28,27 +40,232 @@ except ImportError as e:
     print("Run: pip install movielite pictex google-generativeai python-dotenv")
     exit(1)
 
-# Suppress third-party warnings for cleaner CLI output
+# Suppress third-party warnings for cleaner ux
 import warnings
-warnings.filterwarnings('ignore', category=UserWarning)
-warnings.filterwarnings('ignore', message='.*FontNotFoundWarning.*')
-warnings.filterwarnings('ignore', message='.*fontconfig.*')
-warnings.filterwarnings('ignore', message='.*resource_tracker.*')
+
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*FontNotFoundWarning.*")
+warnings.filterwarnings("ignore", message=".*fontconfig.*")
+warnings.filterwarnings("ignore", message=".*resource_tracker.*")
 import logging
-logging.getLogger('movielite').setLevel(logging.ERROR)
-logging.getLogger('movielite').propagate = False
+
+logging.getLogger("movielite").setLevel(logging.ERROR)
+logging.getLogger("movielite").propagate = False
 
 import contextlib
 
-# Load environment variables from .env file
 load_dotenv()
 
-class ReelGenerator:
-    """Complete reel generation pipeline with multi-source video search and ambient audio."""
 
-    def __init__(self, gemini_key: str = None, pexels_key: str = None, 
-                 pixabay_key: str = None, coverr_key: str = None, mimo_key: str = None):
-        # Load API keys from environment
+@dataclass(frozen=True)
+class HardwareProfile:
+    """CPU topology available to this process, respecting cpuset limits."""
+
+    logical_cpus: Tuple[int, ...]
+    physical_core_groups: Tuple[Tuple[int, ...], ...]
+
+    @property
+    def logical_core_count(self) -> int:
+        return len(self.logical_cpus)
+
+    @property
+    def physical_core_count(self) -> int:
+        return len(self.physical_core_groups)
+
+
+def _detect_hardware_profile() -> HardwareProfile:
+    """Return available logical CPUs grouped by physical core where possible."""
+    try:
+        logical_cpus = tuple(sorted(os.sched_getaffinity(0)))
+    except (AttributeError, OSError):
+        logical_cpus = tuple(range(max(1, os.cpu_count() or 1)))
+    if not logical_cpus:
+        logical_cpus = (0,)
+
+    # Linux exposes sibling threads through sysfs. Keeping siblings together lets
+    # Fast use a small number of complete physical cores instead of all threads.
+    groups: Dict[Tuple[str, str], List[int]] = {}
+    try:
+        for cpu in logical_cpus:
+            topology_dir = f"/sys/devices/system/cpu/cpu{cpu}/topology"
+            with open(os.path.join(topology_dir, "physical_package_id")) as fh:
+                package_id = fh.read().strip()
+            with open(os.path.join(topology_dir, "core_id")) as fh:
+                core_id = fh.read().strip()
+            groups.setdefault((package_id, core_id), []).append(cpu)
+    except OSError:
+        groups = {}
+
+    if groups:
+        physical_core_groups = tuple(
+            tuple(cpus) for _, cpus in sorted(groups.items(), key=lambda item: min(item[1]))
+        )
+    else:
+        # Without topology information, treat each available CPU as a core. This
+        # remains safe because Fast is deliberately capped below all-core usage.
+        physical_core_groups = tuple((cpu,) for cpu in logical_cpus)
+
+    return HardwareProfile(logical_cpus, physical_core_groups)
+
+# ---------------------------------------------------------------------------
+# Speed / resource presets
+#
+# Each preset defines a user experience, not a fixed resource allocation.
+# Render process counts are derived from detected hardware at init time.
+# ---------------------------------------------------------------------------
+PRESETS = {
+    # Background-friendly. Resource limits are resolved from the CPU topology.
+    "normal": {
+        "frame_size": (720, 1280),
+        "target_fps": 24,
+        "video_quality": "middle",
+        "cpu_quota_percent": 60,
+        "download_workers": 1,
+        "download_chunk_size": 131072,
+    },
+    # Faster while intentionally leaving most of the machine to the user.
+    "fast": {
+        "frame_size": (720, 1280),
+        "target_fps": 24,
+        # MovieLite maps this to x264 ultrafast / CRF 23. At 720p it is a
+        # practical Fast trade-off, while Normal retains the balanced encoder.
+        "video_quality": "low",
+        "cpu_quota_percent": None,
+        "download_workers": 2,
+        "download_chunk_size": 262144,
+    },
+}
+
+CALIBRATION_VERSION = 2
+CALIBRATION_SAMPLE_SECONDS = 6.0
+CALIBRATION_MIN_SPEEDUP = 0.08
+CALIBRATION_WORKER_MEMORY_BYTES = 768 * 1024 * 1024
+
+
+def _available_memory_bytes() -> Optional[int]:
+    """Return available RAM on Linux without treating cached memory as unavailable."""
+    try:
+        values = {}
+        with open("/proc/meminfo") as fh:
+            for line in fh:
+                key, value = line.split(":", 1)
+                values[key] = int(value.strip().split()[0]) * 1024
+        return values.get("MemAvailable")
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _candidate_worker_counts(hardware: HardwareProfile) -> Tuple[int, ...]:
+    """Return safe worker candidates without consuming every physical core."""
+    # Reserve one physical core for the desktop whenever the machine has more
+    # than one. MovieLite's short-reel split/merge overhead also makes more than
+    # four candidates counterproductive to benchmark at generation time.
+    cpu_limit = max(1, hardware.physical_core_count - 1)
+    memory_available = _available_memory_bytes()
+    memory_limit = (
+        max(1, memory_available // CALIBRATION_WORKER_MEMORY_BYTES)
+        if memory_available is not None
+        else 2
+    )
+    max_workers = min(4, cpu_limit, memory_limit)
+    return tuple(range(1, max_workers + 1))
+
+
+def _resolve_preset(preset: str, hardware: HardwareProfile) -> Dict[str, Any]:
+    """Resolve a preset into limits appropriate for this machine.
+
+    MovieLite creates one Python compositor and one libx264 encoder per render
+    process. Its implementation also merges every part afterwards, so benchmarked
+    scaling is useful through two workers but additional workers mainly add memory
+    pressure and encoder contention for MindStream's short portrait reels.
+    """
+    if preset not in PRESETS:
+        raise ValueError(f"Unknown preset '{preset}'. Choose from: {', '.join(PRESETS)}")
+
+    config = dict(PRESETS[preset])
+    if preset == "normal":
+        # A single compositor plus the cgroup quota keeps Normal lightweight.
+        # Leave placement to the kernel scheduler rather than pinning CPU 0.
+        config.update(
+            writer_processes=1,
+            ffmpeg_threads=1,
+            cpu_affinity=(),
+            niceness=10,
+        )
+        return config
+
+    # This is a safe first-run fallback. Calibration replaces it with a measured
+    # result once real footage is available. Memory headroom is included here so
+    # Fast never starts more workers than the calibrator considers safe.
+    fast_worker_limit = min(2, max(_candidate_worker_counts(hardware)))
+    config.update(
+        writer_processes=fast_worker_limit,
+        # Measured scaling improves through two encoder threads but not beyond.
+        ffmpeg_threads=min(2, hardware.physical_core_count),
+        cpu_affinity=(),
+        niceness=0,
+    )
+    return config
+
+
+def _run_in_cpu_limited_scope(preset: str) -> Optional[int]:
+    """Re-exec Normal in a user cgroup so its average CPU use is truly capped.
+
+    Affinity and niceness are useful scheduling hints, but neither prevents an
+    idle machine from running one core at 100%. systemd's CPUQuota covers the
+    Python renderer and every MovieLite/FFmpeg child process on Linux.
+    """
+    quota_percent = PRESETS[preset].get("cpu_quota_percent")
+    if (
+        not quota_percent
+        or sys.platform != "linux"
+        or os.getenv("MINDSTREAM_CPU_QUOTA_APPLIED") == "1"
+    ):
+        return None
+
+    systemd_run = shutil.which("systemd-run")
+    if not systemd_run:
+        print("WARNING: CPU quota unavailable; continuing with affinity limits only.")
+        return None
+
+    command = [
+        systemd_run,
+        "--user",
+        "--scope",
+        "--quiet",
+        "-p",
+        f"CPUQuota={quota_percent}%",
+        "env",
+        "MINDSTREAM_CPU_QUOTA_APPLIED=1",
+        sys.executable,
+        os.path.abspath(__file__),
+        *sys.argv[1:],
+    ]
+    print(f"Normal preset: applying a {quota_percent}% CPU quota.")
+    try:
+        import subprocess
+
+        return subprocess.run(command, check=False).returncode
+    except OSError as exc:
+        print(f"WARNING: Could not apply CPU quota ({exc}); continuing normally.")
+        return None
+
+
+# TODO: ambient audio
+class ReelGenerator:
+    """Complete generation pipeline with multi-source video search and ambient audio."""
+
+    def __init__(
+        self,
+        gemini_key: str = None,
+        pexels_key: str = None,
+        pixabay_key: str = None,
+        coverr_key: str = None,
+        mimo_key: str = None,
+        preset: str = "normal",
+        recalibrate_presets: bool = False,
+    ):
+        # load API keys if not provided
         self.gemini_key = gemini_key or os.getenv("GEMINI_API_KEY")
         self.groq_key = os.getenv("GROQ_API_KEY")
         self.pexels_key = pexels_key or os.getenv("PEXELS_API_KEY")
@@ -59,6 +276,17 @@ class ReelGenerator:
         # Script model provider selection
         self.script_provider = os.getenv("SCRIPT_MODEL_PROVIDER", "gemini").lower()
         self.script_model = os.getenv("SCRIPT_MODEL_NAME", "gemini-2.0-flash-exp")
+
+        # Speed / resource preset
+        self.preset = preset
+        self.hardware = _detect_hardware_profile()
+        self.physical_cores = self.hardware.physical_core_count
+        self.preset_cfg = _resolve_preset(preset, self.hardware)
+        self._niceness_applied = False
+        self.recalibrate_presets = recalibrate_presets
+
+        # Reuse a single HTTP session across all API calls (connection pooling)
+        self._http = requests.Session()
 
         # Validate required keys
         if self.script_provider == "gemini" and not self.gemini_key:
@@ -80,28 +308,34 @@ class ReelGenerator:
         os.makedirs(os.path.join(self.output_dir, "audio"), exist_ok=True)
         os.makedirs(os.path.join(self.output_dir, "reels"), exist_ok=True)
         os.makedirs(self.temp_dir, exist_ok=True)
-        
+        self.calibration_path = os.path.join(
+            self.output_dir, "render_profile_calibration.json"
+        )
+
         # Ambient audio mapping (placeholder files - replace with real audio later)
         self.ambient_music = {
             "frustrated": "assets/audio/frustrated.mp3",  # Dark ambient, subtle rain
-            "fatigued":   "assets/audio/fatigued.mp3",    # Soft piano, gentle pads
+            "fatigued": "assets/audio/fatigued.mp3",  # Soft piano, gentle pads
             "distracted": "assets/audio/distracted.mp3",  # Calm waves, subtle wind
-            "anxious":    "assets/audio/anxious.mp3",     # Breathing sounds, soft hum
-            "neutral":    "assets/audio/neutral.mp3",     # White noise, minimal drone
+            "anxious": "assets/audio/anxious.mp3",  # Breathing sounds, soft hum
+            "neutral": "assets/audio/neutral.mp3",  # White noise, minimal drone
         }
 
     @contextlib.contextmanager
     def _spinner(self, message: str):
         """Context manager that shows a braille spinner with the given message."""
         stop = False
+
         def _run():
             idx = 0
             while not stop:
-                sys.stdout.write(f'\r{self.BRAILLE_CHARS[idx % len(self.BRAILLE_CHARS)]} {message}')
+                sys.stdout.write(
+                    f"\r{self.BRAILLE_CHARS[idx % len(self.BRAILLE_CHARS)]} {message}"
+                )
                 sys.stdout.flush()
                 idx += 1
                 time.sleep(0.1)
-            sys.stdout.write('\r' + ' ' * 50 + '\r')
+            sys.stdout.write("\r" + " " * 50 + "\r")
             sys.stdout.flush()
 
         thread = threading.Thread(target=_run, daemon=True)
@@ -123,12 +357,12 @@ class ReelGenerator:
           - "subtitles": list of short phrases (4-6 words each) that together
                          cover the whole script in order
         """
-        activity          = context.get("active_tab_category", "browsing")
-        time_of_day       = context.get("time_of_day", "the day")
-        duration          = context.get("session_duration_minutes", 0)
-        idle_time         = context.get("idle_minutes_since_last_activity", 0)
-        user_name         = context.get("user_name", "friend")
-        local_weather     = context.get("local_weather", "calm")
+        activity = context.get("active_tab_category", "browsing")
+        time_of_day = context.get("time_of_day", "the day")
+        duration = context.get("session_duration_minutes", 0)
+        idle_time = context.get("idle_minutes_since_last_activity", 0)
+        user_name = context.get("user_name", "friend")
+        local_weather = context.get("local_weather", "calm")
 
         # Build activity description more generically
         activity_desc = activity
@@ -181,30 +415,31 @@ Do not truncate, summarise, or skip any part of the script."""
 
         # Call the appropriate LLM based on provider
         if self.script_provider == "groq":
-            response = requests.post(
+            response = self._http.post(
                 "https://api.groq.com/openai/v1/chat/completions",
                 headers={
                     "Authorization": f"Bearer {self.groq_key}",
-                    "Content-Type": "application/json"
+                    "Content-Type": "application/json",
                 },
                 json={
                     "model": self.script_model,
                     "messages": [
-                        {"role": "system", "content": "You are a wise, warm elder who creates mindfulness scripts in JSON format."},
-                        {"role": "user", "content": prompt}
+                        {
+                            "role": "system",
+                            "content": "You are a wise, warm elder who creates mindfulness scripts in JSON format.",
+                        },
+                        {"role": "user", "content": prompt},
                     ],
                     "temperature": 0.8,
-                    "response_format": {"type": "json_object"}
+                    "response_format": {"type": "json_object"},
                 },
-                timeout=30
+                timeout=30,
             )
             response.raise_for_status()
             raw = response.json()["choices"][0]["message"]["content"]
         else:
             response = self.client.models.generate_content(
-                model=self.script_model,
-                contents=prompt,
-                config={"temperature": 0.9}
+                model=self.script_model, contents=prompt, config={"temperature": 0.9}
             )
             raw = response.text.strip()
             # Strip markdown fences if the model ignores the instruction
@@ -216,9 +451,11 @@ Do not truncate, summarise, or skip any part of the script."""
         data = json.loads(raw)
 
         if "script" not in data or "subtitles" not in data:
-            raise ValueError(f"LLM JSON missing required keys. Got: {list(data.keys())}")
+            raise ValueError(
+                f"LLM JSON missing required keys. Got: {list(data.keys())}"
+            )
 
-        script    = data["script"].strip()
+        script = data["script"].strip()
         subtitles = [p.strip() for p in data["subtitles"] if p.strip()]
 
         if not script:
@@ -234,7 +471,7 @@ Do not truncate, summarise, or skip any part of the script."""
 
     def extract_video_keywords(self, script: str, emotion: str) -> List[str]:
         """Extract 3-5 cinematic/moody video search terms from the script."""
-        
+
         prompt = f"""From this mindfulness script about the emotion "{emotion}", extract 3-5 search terms to find matching stock video footage.
 
 Script:
@@ -250,15 +487,18 @@ No explanation, no markdown — just the raw JSON array."""
 
         try:
             if self.script_provider == "groq":
-                response = requests.post(
+                response = self._http.post(
                     "https://api.groq.com/openai/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {self.groq_key}", "Content-Type": "application/json"},
+                    headers={
+                        "Authorization": f"Bearer {self.groq_key}",
+                        "Content-Type": "application/json",
+                    },
                     json={
                         "model": self.script_model,
                         "messages": [{"role": "user", "content": prompt}],
-                        "temperature": 0.7
+                        "temperature": 0.7,
                     },
-                    timeout=20
+                    timeout=20,
                 )
                 response.raise_for_status()
                 text = response.json()["choices"][0]["message"]["content"]
@@ -266,10 +506,10 @@ No explanation, no markdown — just the raw JSON array."""
                 response = self.client.models.generate_content(
                     model=self.script_model,
                     contents=prompt,
-                    config={"temperature": 0.9}
+                    config={"temperature": 0.9},
                 )
                 text = response.text.strip()
-            
+
             text = text.replace("```json", "").replace("```", "").strip()
             keywords = json.loads(text)
             if isinstance(keywords, list) and keywords:
@@ -284,24 +524,35 @@ No explanation, no markdown — just the raw JSON array."""
     # Step 3 — Multi-source video search + download
     # -----------------------------------------------------------------------
 
-    def search_pexels_videos(self, keyword: str, orientation: str = "portrait") -> Optional[str]:
+    def search_pexels_videos(
+        self, keyword: str, orientation: str = "portrait"
+    ) -> Optional[str]:
         """Search Pexels and return a direct download URL for the best match."""
         try:
-            resp = requests.get(
+            resp = self._http.get(
                 "https://api.pexels.com/videos/search",
                 headers={"Authorization": self.pexels_key},
-                params={"query": keyword, "orientation": orientation, "size": "medium", "per_page": 20},
+                params={
+                    "query": keyword,
+                    "orientation": orientation,
+                    "size": "medium",
+                    "per_page": 20,
+                },
                 timeout=10,
             )
             resp.raise_for_status()
             videos = resp.json().get("videos", [])
-            
+
             if not videos:
                 return None
 
             # Prefer HD (height >= 1080) portrait files
             for video in videos:
-                for f in sorted(video.get("video_files", []), key=lambda x: x.get("height", 0), reverse=True):
+                for f in sorted(
+                    video.get("video_files", []),
+                    key=lambda x: x.get("height", 0),
+                    reverse=True,
+                ):
                     if f.get("height", 0) >= 720:
                         return f.get("link")
 
@@ -315,21 +566,21 @@ No explanation, no markdown — just the raw JSON array."""
         """Search Pixabay (fallback source) and return a direct download URL."""
         if not self.pixabay_key:
             return None
-            
+
         try:
-            resp = requests.get(
+            resp = self._http.get(
                 "https://pixabay.com/api/videos/",
                 params={
                     "key": self.pixabay_key,
                     "q": keyword,
                     "video_type": "all",
-                    "per_page": 20
+                    "per_page": 20,
                 },
                 timeout=10,
             )
             resp.raise_for_status()
             videos = resp.json().get("hits", [])
-            
+
             if not videos:
                 return None
 
@@ -339,7 +590,7 @@ No explanation, no markdown — just the raw JSON array."""
                     return video["videos"]["medium"]["url"]
                 elif "small" in video.get("videos", {}):
                     return video["videos"]["small"]["url"]
-                    
+
             return None
         except Exception as e:
             return None
@@ -348,10 +599,10 @@ No explanation, no markdown — just the raw JSON array."""
         """Search Coverr (fallback source) and return a direct download URL."""
         if not self.coverr_key:
             return None
-            
+
         try:
             # Coverr API endpoint (based on common API patterns)
-            resp = requests.get(
+            resp = self._http.get(
                 "https://api.coverr.co/videos",
                 headers={"Authorization": f"Bearer {self.coverr_key}"},
                 params={"query": keyword, "per_page": 20},
@@ -359,7 +610,7 @@ No explanation, no markdown — just the raw JSON array."""
             )
             resp.raise_for_status()
             videos = resp.json().get("videos", [])
-            
+
             if not videos:
                 return None
 
@@ -367,7 +618,7 @@ No explanation, no markdown — just the raw JSON array."""
             for video in videos:
                 if "url" in video:
                     return video["url"]
-                    
+
             return None
         except Exception as e:
             # Coverr API might have different structure, fail gracefully
@@ -375,11 +626,12 @@ No explanation, no markdown — just the raw JSON array."""
 
     def _download_video(self, url: str, dest: str) -> bool:
         try:
-            r = requests.get(url, stream=True, timeout=60)
+            r = self._http.get(url, stream=True, timeout=60)
             r.raise_for_status()
-            
+
+            chunk_size = self.preset_cfg["download_chunk_size"]
             with open(dest, "wb") as fh:
-                for chunk in r.iter_content(chunk_size=65536):
+                for chunk in r.iter_content(chunk_size=chunk_size):
                     fh.write(chunk)
             return True
         except Exception as e:
@@ -393,48 +645,50 @@ No explanation, no markdown — just the raw JSON array."""
         if not keywords:
             print("No keywords extracted — cannot download videos")
             return []
-        
+
         def download_single_keyword(i: int, kw: str) -> Optional[str]:
             """Try all sources for a keyword: Pexels → Pixabay → Coverr"""
             url = None
-            
+
             # Try Pexels first
             url = self.search_pexels_videos(kw)
             if url:
                 source = "Pexels"
-            
+
             # Fallback to Pixabay
             if not url and self.pixabay_key:
                 url = self.search_pixabay_videos(kw)
                 if url:
                     source = "Pixabay"
-            
+
             # Fallback to Coverr
             if not url and self.coverr_key:
                 url = self.search_coverr_videos(kw)
                 if url:
                     source = "Coverr"
-            
+
             if not url:
                 return None
-                
+
             dest = os.path.join(self.temp_dir, f"{job_id}_clip_{i}.mp4")
             if self._download_video(url, dest):
                 return dest
             return None
-        
+
         # Download videos in parallel with DNF-style progress
         paths = []
         completed = 0
         total = len(keywords)
         width = 20
-        
-        with ThreadPoolExecutor(max_workers=min(4, len(keywords))) as executor:
+
+        with ThreadPoolExecutor(
+            max_workers=min(self.preset_cfg["download_workers"], len(keywords))
+        ) as executor:
             futures = {
-                executor.submit(download_single_keyword, i, kw): (i, kw) 
+                executor.submit(download_single_keyword, i, kw): (i, kw)
                 for i, kw in enumerate(keywords)
             }
-            
+
             for future in as_completed(futures):
                 i, kw = futures[future]
                 try:
@@ -447,26 +701,40 @@ No explanation, no markdown — just the raw JSON array."""
                 # DNF-style progress bar matching the format of other steps
                 pct = int(100 * completed / total) if total > 0 else 0
                 filled = int(width * completed / total) if total > 0 else 0
-                bar = '━' * filled + ' ' * (width - filled)
+                bar = "━" * filled + " " * (width - filled)
                 color = self.CYAN if completed < total else self.GREEN
                 # Format exactly like _progress_bar_dnf with green checkmark prefix
                 desc = f"{'Downloading footage':<26}"
                 if completed >= total:
                     # Final line with green checkmark
-                    print(f"\r{self.GREEN}✓{self.RESET} {desc}{color}{pct:3d}% |{bar}| {completed}/{total}{self.RESET}", end='', flush=True)
+                    print(
+                        f"\r{self.GREEN}✓{self.RESET} {desc}{color}{pct:3d}% |{bar}| {completed}/{total}{self.RESET}",
+                        end="",
+                        flush=True,
+                    )
                 else:
                     # In-progress with spinner (updates per item)
-                    spinner_char = self.BRAILLE_CHARS[completed % len(self.BRAILLE_CHARS)]
-                    print(f"\r{self.CYAN}{spinner_char}{self.RESET} {desc}{color}{pct:3d}% |{bar}| {completed}/{total}{self.RESET}", end='', flush=True)
-        
+                    spinner_char = self.BRAILLE_CHARS[
+                        completed % len(self.BRAILLE_CHARS)
+                    ]
+                    print(
+                        f"\r{self.CYAN}{spinner_char}{self.RESET} {desc}{color}{pct:3d}% |{bar}| {completed}/{total}{self.RESET}",
+                        end="",
+                        flush=True,
+                    )
+
         print()  # newline after progress
         # Sort paths by clip number to maintain order
-        paths.sort(key=lambda p: int(re.search(r'clip_(\d+)', p).group(1)) if 'clip_' in p else 999)
-        
+        paths.sort(
+            key=lambda p: (
+                int(re.search(r"clip_(\d+)", p).group(1)) if "clip_" in p else 999
+            )
+        )
+
         if not paths:
             print("No videos could be downloaded from any source")
             return []
-        
+
         return paths
 
     # -----------------------------------------------------------------------
@@ -475,11 +743,10 @@ No explanation, no markdown — just the raw JSON array."""
 
     async def _generate_tts_async(self, script: str, output_path: str) -> str:
         loop = asyncio.get_event_loop()
-        
-        
+
         response = await loop.run_in_executor(
             None,
-            lambda: requests.post(
+            lambda: self._http.post(
                 "https://api.xiaomimimo.com/v1/chat/completions",
                 headers={
                     "Authorization": f"Bearer {self.mimo_key}",
@@ -493,7 +760,7 @@ No explanation, no markdown — just the raw JSON array."""
                 timeout=90,
             ),
         )
-        
+
         if response.status_code != 200:
             raise RuntimeError(
                 f"MiMo TTS API error {response.status_code}: {response.text[:300]}"
@@ -501,7 +768,7 @@ No explanation, no markdown — just the raw JSON array."""
         audio_b64 = response.json()["choices"][0]["message"]["audio"]["data"]
         with open(output_path, "wb") as fh:
             fh.write(base64.b64decode(audio_b64))
-        
+
         return output_path
 
     def generate_tts(self, script: str, output_path: str) -> str:
@@ -517,9 +784,12 @@ No explanation, no markdown — just the raw JSON array."""
     def _srt_ts(seconds: float) -> str:
         """Convert float seconds → SRT timestamp string HH:MM:SS,mmm."""
         ms = max(0, int(round(seconds * 1000)))
-        h  = ms // 3_600_000;  ms %= 3_600_000
-        m  = ms // 60_000;     ms %= 60_000
-        s  = ms // 1_000;      ms %= 1_000
+        h = ms // 3_600_000
+        ms %= 3_600_000
+        m = ms // 60_000
+        ms %= 60_000
+        s = ms // 1_000
+        ms %= 1_000
         return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
     @staticmethod
@@ -538,31 +808,31 @@ No explanation, no markdown — just the raw JSON array."""
         if not subtitles:
             return ""
 
-        PAUSE_BONUS = 0.20   # Add 20% extra time for phrases ending with punctuation
-        
+        PAUSE_BONUS = 0.20  # Add 20% extra time for phrases ending with punctuation
+
         # Use character count (better proxy for speech duration than word count)
         weights = []
         for phrase in subtitles:
             # Count characters (excluding spaces) as base weight
             w = max(1, len(phrase.replace(" ", "")))
-            
+
             # Add pause time for sentence endings
             if self._phrase_has_pause(phrase):
                 w += PAUSE_BONUS * w
-            
+
             weights.append(w)
 
         total_weight = sum(weights)
-        available    = audio_duration
+        available = audio_duration
 
-        lines   = []
-        cursor  = 0.0
+        lines = []
+        cursor = 0.0
 
         for idx, (phrase, weight) in enumerate(zip(subtitles, weights), start=1):
             phrase_dur = available * (weight / total_weight)
-            start      = cursor
-            end        = cursor + phrase_dur
-            cursor     = end
+            start = cursor
+            end = cursor + phrase_dur
+            cursor = end
 
             lines.append(str(idx))
             lines.append(f"{self._srt_ts(start)} --> {self._srt_ts(end)}")
@@ -580,64 +850,321 @@ No explanation, no markdown — just the raw JSON array."""
     # -----------------------------------------------------------------------
 
     @staticmethod
-    def parse_srt(srt_path: str) -> List[Tuple[float, float, str]]:
-        """
-        Parse SRT file and return list of (start_time, end_time, text) tuples.
-        Times are in seconds (float).
-        """
-        with open(srt_path, 'r', encoding='utf-8') as f:
-            content = f.read().strip()
-        
-        # Split by double newlines (subtitle blocks)
-        blocks = re.split(r'\n\n+', content)
+    def _parse_srt_content(content: str) -> List[Tuple[float, float, str]]:
+        """Parse SRT content string and return list of (start, end, text) tuples."""
+        content = content.strip()
+        blocks = re.split(r"\n\n+", content)
         subtitles = []
-        
+
         for block in blocks:
-            lines = block.strip().split('\n')
+            lines = block.strip().split("\n")
             if len(lines) < 3:
                 continue
-            
-            # Line 0: sequence number (ignore)
-            # Line 1: timestamp (00:00:01,234 --> 00:00:03,456)
-            # Line 2+: subtitle text
-            
+
             timestamp_line = lines[1]
-            match = re.match(r'(\d{2}):(\d{2}):(\d{2}),(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2}),(\d{3})', timestamp_line)
+            match = re.match(
+                r"(\d{2}):(\d{2}):(\d{2}),(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2}),(\d{3})",
+                timestamp_line,
+            )
             if not match:
                 continue
-            
-            # Parse start time
+
             h1, m1, s1, ms1, h2, m2, s2, ms2 = map(int, match.groups())
             start_time = h1 * 3600 + m1 * 60 + s1 + ms1 / 1000.0
             end_time = h2 * 3600 + m2 * 60 + s2 + ms2 / 1000.0
-            
-            # Join remaining lines as text
-            text = ' '.join(lines[2:])
-            
+            text = " ".join(lines[2:])
             subtitles.append((start_time, end_time, text))
-        
+
         return subtitles
 
-    def _create_subtitle_canvas(self) -> Canvas:
+    @staticmethod
+    def parse_srt(srt_path: str) -> List[Tuple[float, float, str]]:
+        """Parse SRT file and return list of (start_time, end_time, text) tuples."""
+        with open(srt_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        return ReelGenerator._parse_srt_content(content)
+
+    def _create_subtitle_canvas(self, frame_width: int) -> Canvas:
         """Create styled canvas for subtitle text (MovieLite/pictex)."""
+        scale = frame_width / 1080
         return (
             Canvas()
             .font_family("Poppins")
-            .font_size(50)
+            .font_size(round(50 * scale))
             .color("#FFFF00")  # Yellow
-            .text_shadows(Shadow(offset=(2, 2), blur_radius=3, color="black"))
-            .padding(20)
+            .text_shadows(
+                Shadow(
+                    offset=(round(2 * scale), round(2 * scale)),
+                    blur_radius=round(3 * scale),
+                    color="black",
+                )
+            )
+            .padding(round(20 * scale))
         )
 
-    def _resize_to_portrait(self, clip: ml.VideoClip) -> ml.VideoClip:
+    def _resize_to_portrait(
+        self, clip: ml.VideoClip, frame_size: Tuple[int, int]
+    ) -> ml.VideoClip:
         """
-        Resize to exactly 1080×1920 (9:16) using MovieLite.
+        Resize to the preset's portrait output size using MovieLite.
         MovieLite's set_size() maintains aspect ratio and crops/pads automatically.
         """
         # MovieLite's set_size will resize maintaining aspect ratio
         # If the source aspect ratio doesn't match, it will crop center
-        clip.set_size(width=1080, height=1920)
+        clip.set_size(width=frame_size[0], height=frame_size[1])
         return clip
+
+    def _calibration_signature(self) -> Dict[str, Any]:
+        """Describe the machine and output profile that affect worker scaling."""
+        return {
+            "logical_cpus": list(self.hardware.logical_cpus),
+            "physical_core_groups": [
+                list(group) for group in self.hardware.physical_core_groups
+            ],
+            "frame_size": list(self.preset_cfg["frame_size"]),
+            "target_fps": self.preset_cfg["target_fps"],
+            "video_quality": self.preset_cfg["video_quality"],
+            "movielite_version": getattr(ml, "__version__", "unknown"),
+        }
+
+    def _affinity_for_workers(self, workers: int) -> Tuple[int, ...]:
+        # Process count is the resource control. The kernel can then place work
+        # naturally instead of permanently reserving arbitrary CPU IDs.
+        return ()
+
+    def _load_calibrated_workers(self) -> Optional[int]:
+        if self.recalibrate_presets or not os.path.exists(self.calibration_path):
+            return None
+        try:
+            with open(self.calibration_path, encoding="utf-8") as fh:
+                cached = json.load(fh)
+            profile = cached.get("profiles", {}).get(self.preset)
+            if (
+                cached.get("version") != CALIBRATION_VERSION
+                or cached.get("signature") != self._calibration_signature()
+                or not profile
+            ):
+                return None
+            workers = int(profile["workers"])
+            return workers if workers in _candidate_worker_counts(self.hardware) else None
+        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+            return None
+
+    def _save_calibrated_workers(
+        self, workers: int, timings: Dict[int, float]
+    ) -> None:
+        payload: Dict[str, Any] = {
+            "version": CALIBRATION_VERSION,
+            "signature": self._calibration_signature(),
+            "profiles": {},
+        }
+        try:
+            if os.path.exists(self.calibration_path):
+                with open(self.calibration_path, encoding="utf-8") as fh:
+                    existing = json.load(fh)
+                if existing.get("signature") == payload["signature"]:
+                    payload["profiles"] = existing.get("profiles", {})
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            pass
+
+        payload["profiles"][self.preset] = {
+            "workers": workers,
+            "timings_seconds": {str(key): round(value, 3) for key, value in timings.items()},
+        }
+        temporary_path = f"{self.calibration_path}.tmp"
+        try:
+            with open(temporary_path, "w", encoding="utf-8") as fh:
+                json.dump(payload, fh, indent=2)
+            os.replace(temporary_path, self.calibration_path)
+        except OSError:
+            try:
+                os.remove(temporary_path)
+            except OSError:
+                pass
+
+    def _benchmark_render_workers(self, video_path: str, workers: int) -> float:
+        """Render a short clip using a candidate worker count and return wall time."""
+        frame_width, frame_height = self.preset_cfg["frame_size"]
+        output_path = os.path.join(
+            self.temp_dir, f"calibration_{self.preset}_{workers}_{os.getpid()}.mp4"
+        )
+        clip = None
+        started = time.perf_counter()
+        try:
+            with self._limit_render_resources(
+                self.preset_cfg["ffmpeg_threads"],
+                self._affinity_for_workers(workers),
+                self.preset_cfg["niceness"],
+            ):
+                clip = ml.VideoClip(video_path)
+                sample_duration = min(CALIBRATION_SAMPLE_SECONDS, clip.duration)
+                if sample_duration <= 0:
+                    raise RuntimeError("Video has no usable duration for calibration")
+                self._resize_to_portrait(clip, (frame_width, frame_height))
+                clip.set_duration(sample_duration)
+                writer = ml.VideoWriter(
+                    output_path,
+                    fps=self.preset_cfg["target_fps"],
+                    size=(frame_width, frame_height),
+                    duration=sample_duration,
+                )
+                writer.add_clip(clip)
+                writer.write(
+                    processes=workers,
+                    video_quality=(
+                        ml.VideoQuality.HIGH
+                        if self.preset_cfg["video_quality"] == "high"
+                        else ml.VideoQuality.MIDDLE
+                    ),
+                )
+            return time.perf_counter() - started
+        finally:
+            if clip is not None and hasattr(clip, "close"):
+                clip.close()
+            try:
+                os.remove(output_path)
+            except OSError:
+                pass
+
+    def _configure_calibrated_workers(self, video_path: str) -> None:
+        """Select a measured Fast worker count once per hardware/output profile."""
+        if self.preset != "fast":
+            return
+
+        cached_workers = self._load_calibrated_workers()
+        if cached_workers is not None:
+            self.preset_cfg["writer_processes"] = cached_workers
+            self.preset_cfg["cpu_affinity"] = self._affinity_for_workers(cached_workers)
+            return
+
+        candidates = _candidate_worker_counts(self.hardware)
+        if len(candidates) == 1:
+            self.preset_cfg["writer_processes"] = candidates[0]
+            self.preset_cfg["cpu_affinity"] = ()
+            print("  Fast: using one render worker while memory headroom is limited.")
+            return
+
+        print("Calibrating Fast for this machine (one-time)...")
+        timings: Dict[int, float] = {}
+        for workers in candidates:
+            try:
+                timings[workers] = self._benchmark_render_workers(video_path, workers)
+            except Exception:
+                continue
+
+        if not timings:
+            print("  Calibration skipped; using the safe Fast fallback.")
+            return
+
+        selected_workers = min(timings)
+        selected_time = timings[selected_workers]
+        for workers in sorted(timings):
+            if workers == selected_workers:
+                continue
+            candidate_time = timings[workers]
+            if candidate_time <= selected_time * (1 - CALIBRATION_MIN_SPEEDUP):
+                selected_workers = workers
+                selected_time = candidate_time
+
+        self.preset_cfg["writer_processes"] = selected_workers
+        self.preset_cfg["cpu_affinity"] = self._affinity_for_workers(selected_workers)
+        self._save_calibrated_workers(selected_workers, timings)
+        print(f"  Fast calibrated: {selected_workers} render worker(s).")
+
+    @contextlib.contextmanager
+    def _limit_render_resources(
+        self,
+        ffmpeg_threads: int,
+        cpu_affinity: Tuple[int, ...],
+        niceness: int,
+    ):
+        """Apply the preset's CPU budget to MovieLite and its child processes.
+
+        MovieLite forks render workers, so the affinity, niceness, and Popen patch
+        are inherited by frame rendering, libx264 encoding, audio work, and merging.
+        """
+        import subprocess
+
+        original_popen = subprocess.Popen
+
+        _patch_count = 0  # track how many calls we intercepted
+
+        def _patched_popen(args, *posargs, **kwargs):
+            nonlocal _patch_count
+            if isinstance(args, (list, tuple)) and args:
+                # Match "ffmpeg" by basename (handles /usr/bin/ffmpeg too)
+                prog = os.path.basename(str(args[0]))
+                if prog == "ffmpeg" and "-threads" not in args:
+                    args = list(args)
+                    # Find last occurrence of "-i" to place -threads as an output option (after input)
+                    last_i = -1
+                    for idx, arg in enumerate(args):
+                        if str(arg) == "-i":
+                            last_i = idx
+                    insert_idx = (
+                        (last_i + 2)
+                        if (last_i != -1 and last_i + 1 < len(args))
+                        else (len(args) - 1)
+                    )
+                    args.insert(insert_idx, "-threads")
+                    args.insert(insert_idx + 1, str(ffmpeg_threads))
+                    _patch_count += 1
+            return original_popen(args, *posargs, **kwargs)
+
+        # MovieLite's compositor calls OpenCV for every frame. Keep it single
+        # threaded so one render worker cannot exceed its preset CPU budget.
+        try:
+            import cv2
+
+            saved_cv2_threads = cv2.getNumThreads()
+            cv2.setNumThreads(1)
+        except Exception:
+            saved_cv2_threads = None
+
+        saved_affinity = None
+        if cpu_affinity and hasattr(os, "sched_setaffinity"):
+            try:
+                saved_affinity = os.sched_getaffinity(0)
+                os.sched_setaffinity(0, set(cpu_affinity))
+            except (OSError, PermissionError):
+                saved_affinity = None
+
+        subprocess.Popen = _patched_popen
+        if niceness > 0 and not self._niceness_applied:
+            # This is intentionally applied only to Normal. Linux niceness cannot
+            # be raised again without elevated privileges, but this worker exits
+            # after generation and all MovieLite children inherit the lower priority.
+            try:
+                os.nice(niceness)
+                self._niceness_applied = True
+            except (OSError, PermissionError):
+                pass
+
+        try:
+            yield
+        finally:
+            subprocess.Popen = original_popen
+
+            if saved_cv2_threads is not None:
+                try:
+                    import cv2
+
+                    cv2.setNumThreads(saved_cv2_threads)
+                except Exception:
+                    pass
+
+            if saved_affinity is not None and hasattr(os, "sched_setaffinity"):
+                try:
+                    os.sched_setaffinity(0, saved_affinity)
+                except (OSError, PermissionError):
+                    pass
+
+            if _patch_count > 0:
+                print(
+                    f"  (patched {_patch_count} ffmpeg calls → threads={ffmpeg_threads})"
+                )
+            else:
+                print(f"  (WARNING: ffmpeg patch did not fire — threads not limited)")
 
     def composite_reel(
         self,
@@ -646,155 +1173,170 @@ No explanation, no markdown — just the raw JSON array."""
         output_path: str,
         subtitle_list: List[str],
         ambient_path: Optional[str] = None,
+        tts_duration: float = 0.0,
     ) -> str:
         """
-        Composite reel using MovieLite (4x faster than MoviePy).
+        Composite reel using MovieLite.
         Concatenates video clips, mixes audio, and overlays subtitles.
+        Wrapped entirely in _limit_render_resources so every MovieLite stage
+        respects the selected CPU budget.
         """
-        # Get TTS audio duration to determine video length
-        tts_audio = ml.AudioClip(tts_path)
-        duration = tts_audio.duration
-        
-        # --- Phase 1: Process video clips with smooth playback optimization ---
-        time_per_clip = duration / len(video_paths)
-        processed_clips = []
-        current_time = 0.0  # Track cumulative time to avoid gaps
-        
-        TARGET_FPS = 30  # Standardize all clips to 30fps for smooth playback
-        
-        for i, path in enumerate(video_paths):
-            clip = ml.VideoClip(path)
-            
-            # CRITICAL FIX 1: Resize BEFORE setting duration/fps to avoid frame inconsistencies
-            clip = self._resize_to_portrait(clip)
-            
-            # CRITICAL FIX 2: Get the actual source FPS and standardize to TARGET_FPS
-            # This prevents jitter from FPS mismatches between clips
-            source_fps = getattr(clip, 'fps', 30)
-            
-            # CRITICAL FIX 3: If clip is too short, use looping instead of freezing last frame
-            # This creates smoother transitions
-            if clip.duration < time_per_clip:
-                clip.loop(True)  # Enable looping for short clips
-            
-            # CRITICAL FIX 4: Set exact duration to prevent gaps/overlaps
-            clip.set_duration(time_per_clip)
-            clip.set_start(current_time)
-            
-            # Move to next clip's start time
-            current_time += time_per_clip
-            
-            processed_clips.append(clip)
-        
-        print(f"{self.GREEN}✓{self.RESET} Processing video clips")
-        
-        # --- Phase 2: Setup audio ---
-        print(f"{self.GREEN}✓{self.RESET} Synchronizing audio")
-        
-        # Add TTS audio
-        tts_audio.set_start(0)
-        
-        # Add ambient audio if provided
-        audio_clips = [tts_audio]
-        if ambient_path and os.path.exists(ambient_path):
-            ambient_audio = ml.AudioClip(ambient_path, start=0, volume=0.12)
-            ambient_audio.set_duration(duration)
-            ambient_audio.loop(True)  # Loop if shorter than TTS
-            audio_clips.append(ambient_audio)
-        
-        # --- Phase 3: Generate and parse subtitles ---
-        srt_content = self.build_srt(subtitle_list, duration)
-        srt_path = tts_path.replace(".mp3", ".srt")
-        with open(srt_path, "w", encoding="utf-8") as fh:
-            fh.write(srt_content)
-        
-        # Parse SRT and create TextClip for each subtitle
-        subtitle_clips = []
-        canvas = self._create_subtitle_canvas()
+        ffmpeg_threads = self.preset_cfg["ffmpeg_threads"]
+        cpu_affinity = self.preset_cfg["cpu_affinity"]
+        niceness = self.preset_cfg["niceness"]
 
-        for start_time, end_time, text in self.parse_srt(srt_path):
-            adjusted_start = max(0, start_time - 0.2)
-            adjusted_end = max(adjusted_start + 0.1, end_time - 0.2)
+        with self._limit_render_resources(ffmpeg_threads, cpu_affinity, niceness):
+            # Use pre-computed duration to avoid re-loading the TTS audio
+            if tts_duration <= 0:
+                tts_audio_tmp = ml.AudioClip(tts_path)
+                tts_duration = tts_audio_tmp.duration
+                tts_audio_tmp.close()
+            duration = tts_duration
 
-            text_clip = ml.TextClip(
-                text,
-                start=adjusted_start,
-                duration=adjusted_end - adjusted_start,
-                canvas=canvas
+            target_fps = self.preset_cfg["target_fps"]
+            writer_procs = self.preset_cfg["writer_processes"]
+            frame_width, frame_height = self.preset_cfg["frame_size"]
+            quality_str = self.preset_cfg["video_quality"]
+            video_quality = (
+                ml.VideoQuality.HIGH
+                if quality_str == "high"
+                else (
+                    ml.VideoQuality.LOW
+                    if quality_str == "low"
+                    else ml.VideoQuality.MIDDLE
+                )
             )
 
-            text_width = text_clip.size[0]
-            text_clip.set_position(((1080 - text_width) // 2, 1650))
-            subtitle_clips.append(text_clip)
-        
-        print(f"{self.GREEN}✓{self.RESET} Rendering {len(subtitle_clips)} subtitle segments\n")
-        
-        # --- Phase 5: Export ---
-        self._print_step(5, 5, "Exporting final video")
-        
-        with self._spinner("Exporting..."):
-            # Create writer with optimized settings for smooth playback
-            writer = ml.VideoWriter(
-                output_path, 
-                fps=30,
-                size=(1080, 1920),
-                duration=duration
+            # --- Phase 1: Process video clips ---
+            time_per_clip = duration / len(video_paths)
+            processed_clips = []
+            current_time = 0.0
+
+            for i, path in enumerate(video_paths):
+                clip = ml.VideoClip(path)
+                clip = self._resize_to_portrait(clip, (frame_width, frame_height))
+
+                if clip.duration < time_per_clip:
+                    clip.loop(True)
+
+                clip.set_duration(time_per_clip)
+                clip.set_start(current_time)
+                current_time += time_per_clip
+                processed_clips.append(clip)
+
+            print(f"{self.GREEN}✓{self.RESET} Processing video clips")
+
+            # --- Phase 2: Setup audio ---
+            print(f"{self.GREEN}✓{self.RESET} Synchronizing audio")
+
+            tts_audio = ml.AudioClip(tts_path)
+            tts_audio.set_start(0)
+
+            audio_clips = [tts_audio]
+            if ambient_path and os.path.exists(ambient_path):
+                ambient_audio = ml.AudioClip(ambient_path, start=0, volume=0.12)
+                ambient_audio.set_duration(duration)
+                ambient_audio.loop(True)
+                audio_clips.append(ambient_audio)
+
+            # --- Phase 3: Generate subtitles in memory (no disk write) ---
+            srt_content = self.build_srt(subtitle_list, duration)
+            subtitle_entries = self._parse_srt_content(srt_content)
+
+            subtitle_clips = []
+            canvas = self._create_subtitle_canvas(frame_width)
+
+            for start_time, end_time, text in subtitle_entries:
+                adjusted_start = max(0, start_time - 0.2)
+                adjusted_end = max(adjusted_start + 0.1, end_time - 0.2)
+
+                text_clip = ml.TextClip(
+                    text,
+                    start=adjusted_start,
+                    duration=adjusted_end - adjusted_start,
+                    canvas=canvas,
+                )
+
+                text_width = text_clip.size[0]
+                text_clip.set_position(
+                    ((frame_width - text_width) // 2, int(frame_height * 0.86))
+                )
+                subtitle_clips.append(text_clip)
+
+            print(
+                f"{self.GREEN}✓{self.RESET} Rendering {len(subtitle_clips)} subtitle segments\n"
             )
-            
-            for clip in processed_clips:
-                writer.add_clip(clip)
-            for audio_clip in audio_clips:
-                writer.add_clip(audio_clip)
-            for sub_clip in subtitle_clips:
-                writer.add_clip(sub_clip)
-            
-            writer.write(processes=4, video_quality=ml.VideoQuality.HIGH)
-        
-        print(f"{self.GREEN}✓{self.RESET} Reel generated successfully")
-        
-        # Cleanup - MovieLite clips have close() method, but it's optional
-        # They auto-cleanup when garbage collected
-        try:
-            for clip in processed_clips:
-                if hasattr(clip, 'close'):
-                    clip.close()
-        except Exception:
-            pass  # Ignore cleanup errors
-        
-        return output_path
+
+            # --- Phase 4: Export ---
+            self._print_step(5, 5, "Exporting final video")
+
+            with self._spinner("Exporting..."):
+                writer = ml.VideoWriter(
+                    output_path,
+                    fps=target_fps,
+                    size=(frame_width, frame_height),
+                    duration=duration,
+                )
+
+                for clip in processed_clips:
+                    writer.add_clip(clip)
+                for audio_clip in audio_clips:
+                    writer.add_clip(audio_clip)
+                for sub_clip in subtitle_clips:
+                    writer.add_clip(sub_clip)
+
+                writer.write(processes=writer_procs, video_quality=video_quality)
+
+            print(f"{self.GREEN}✓{self.RESET} Reel generated successfully")
+
+            # Cleanup all held resources
+            all_clips = processed_clips + audio_clips + subtitle_clips
+            for clip in all_clips:
+                try:
+                    if hasattr(clip, "close"):
+                        clip.close()
+                except Exception:
+                    pass
+
+            return output_path
 
     # -----------------------------------------------------------------------
     # Main pipeline
     # -----------------------------------------------------------------------
 
     # ANSI color codes
-    CYAN = '\033[96m'
-    GREEN = '\033[92m'
-    RED = '\033[91m'
-    RESET = '\033[0m'
+    CYAN = "\033[96m"
+    GREEN = "\033[92m"
+    RED = "\033[91m"
+    RESET = "\033[0m"
 
     # Braille spinner for multi-stage loading
-    BRAILLE_CHARS = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+    BRAILLE_CHARS = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
     def _print_step(self, step: int, total: int, desc: str):
         """Print step header in DNF style."""
         print(f"[{step}/{total}] {desc}")
 
-    def _progress_bar_dnf(self, current: int, total: int, desc: str, color: str = '') -> str:
+    def _progress_bar_dnf(
+        self, current: int, total: int, desc: str, color: str = ""
+    ) -> str:
         """Generate DNF-style progress bar with proper vertical alignment."""
         width = 20
         percentage = (current / total * 100) if total > 0 else 0
         filled = int(width * current / total) if total > 0 else 0
-        bar = '━' * filled + ' ' * (width - filled)
+        bar = "━" * filled + " " * (width - filled)
         return f"{desc:<25} {color}{percentage:3.0f}% |{bar}| {current}/{total}{self.RESET}"
-    
-    def generate_reel(self, job_id: str, emotion: str, context: Dict[str, Any], header: bool = True) -> Dict[str, Any]:
+
+    def generate_reel(
+        self, job_id: str, emotion: str, context: Dict[str, Any], header: bool = True
+    ) -> Dict[str, Any]:
         result: Dict[str, Any] = {
             "success": False,
             "job_id": job_id,
             "reel_path": None,
             "script": None,
             "keywords": None,
+            "preset": self.preset,
             "error": None,
         }
 
@@ -802,31 +1344,34 @@ No explanation, no markdown — just the raw JSON array."""
             # Phase 1: Script generation
             self._print_step(1, 5, "Generating personalized script")
             print(f"Provider : Gemini ({self.script_model})")
-            
+
             with self._spinner("Generating script..."):
-                script_data   = self.generate_script(emotion, context)
-                script        = script_data["script"]
+                script_data = self.generate_script(emotion, context)
+                script = script_data["script"]
                 subtitle_list = script_data["subtitles"]
                 result["script"] = script
-            
+
             desc = f"{'Script generated':<26}"
-            print(f"{self.GREEN}✓{self.RESET} {desc}{self.GREEN}100% |{'━' * 20}| 1/1{self.RESET}\n")
+            print(
+                f"{self.GREEN}✓{self.RESET} {desc}{self.GREEN}100% |{'━' * 20}| 1/1{self.RESET}\n"
+            )
 
             # Phase 2: Video search
             self._print_step(2, 5, "Finding supporting visuals")
             print(f"Provider : Pexels")
-            
+
             with self._spinner("Searching videos..."):
                 keywords = self.extract_video_keywords(script, emotion)
                 result["keywords"] = keywords
                 if not keywords:
                     raise RuntimeError("Could not extract video keywords from script")
-            
+
             def _truncate(kw, maxlen=20):
-                return kw if len(kw) <= maxlen else kw[:maxlen-1] + "…"
+                return kw if len(kw) <= maxlen else kw[: maxlen - 1] + "…"
+
             keywords_display = " • ".join(_truncate(kw) for kw in keywords[:4])
             print(f"Keywords : {keywords_display}")
-            
+
             video_paths = self.download_videos_for_script(keywords, job_id)
             if not video_paths:
                 raise RuntimeError("No videos could be downloaded")
@@ -835,36 +1380,46 @@ No explanation, no markdown — just the raw JSON array."""
             # Phase 3: TTS generation
             self._print_step(3, 5, "Generating narration")
             print(f"Provider : MiMo (Dean)")
-            
+
             with self._spinner("Generating narration..."):
                 tts_path = os.path.join(self.output_dir, "audio", f"{job_id}.mp3")
                 self.generate_tts(script, tts_path)
-            
-            # Calculate audio duration for display
+
+            # Compute TTS duration once (avoids reloading in composite_reel)
+            tts_duration = 0.0
             try:
                 audio = ml.AudioClip(tts_path)
-                duration = int(audio.duration)
+                tts_duration = audio.duration
+                duration_display = int(tts_duration)
                 audio.close()
                 desc = f"{'Narration generated':<26}"
-                print(f"{self.GREEN}✓{self.RESET} {desc}{self.GREEN}100% |{'━' * 20}| 1/1{self.RESET} ({duration}s)\n")
+                print(
+                    f"{self.GREEN}✓{self.RESET} {desc}{self.GREEN}100% |{'━' * 20}| 1/1{self.RESET} ({duration_display}s)\n"
+                )
             except:
                 desc = f"{'Narration generated':<26}"
-                print(f"{self.GREEN}✓{self.RESET} {desc}{self.GREEN}100% |{'━' * 20}| 1/1{self.RESET}\n")
+                print(
+                    f"{self.GREEN}✓{self.RESET} {desc}{self.GREEN}100% |{'━' * 20}| 1/1{self.RESET}\n"
+                )
 
             # Phase 4: Timeline preparation
             self._print_step(4, 5, "Preparing final composition")
-            reel_path    = os.path.join(self.output_dir, "reels", f"{job_id}.mp4")
-            ambient_path = self.ambient_music.get(emotion, self.ambient_music.get("neutral"))
+            self._configure_calibrated_workers(video_paths[0])
+            reel_path = os.path.join(self.output_dir, "reels", f"{job_id}.mp4")
+            ambient_path = self.ambient_music.get(
+                emotion, self.ambient_music.get("neutral")
+            )
             self.composite_reel(
                 video_paths=video_paths,
                 tts_path=tts_path,
                 output_path=reel_path,
                 subtitle_list=subtitle_list,
                 ambient_path=ambient_path,
+                tts_duration=tts_duration,
             )
 
             result["reel_path"] = reel_path
-            result["success"]   = True
+            result["success"] = True
 
             # Clean up temp video clips
             for p in video_paths:
@@ -876,6 +1431,7 @@ No explanation, no markdown — just the raw JSON array."""
         except Exception as exc:
             result["error"] = str(exc)
             import traceback
+
             traceback.print_exc()
 
         return result
@@ -885,23 +1441,41 @@ No explanation, no markdown — just the raw JSON array."""
 # CLI entry point
 # ---------------------------------------------------------------------------
 
+
 def main() -> int:
     import argparse
 
-    print("MindStream — Phase 3: Reel Generation\n")
-    print("Checking environment...")
-
     parser = argparse.ArgumentParser(description="MindStream Reel Generator")
-    parser.add_argument("--job-id",   required=False, help="Job ID")
-    parser.add_argument("--emotion",  required=False, help="Emotion label")
-    parser.add_argument("--context",  required=False, help="Context JSON string")
+    parser.add_argument("--job-id", required=False, help="Job ID")
+    parser.add_argument("--emotion", required=False, help="Emotion label")
+    parser.add_argument("--context", required=False, help="Context JSON string")
+    parser.add_argument(
+        "--preset",
+        required=False,
+        default="normal",
+        choices=list(PRESETS.keys()),
+        help="Speed/resource preset (default: normal)",
+    )
+    parser.add_argument(
+        "--recalibrate-presets",
+        action="store_true",
+        help="Ignore cached Fast calibration and measure worker scaling again",
+    )
     args = parser.parse_args()
 
+    scoped_exit_code = _run_in_cpu_limited_scope(args.preset)
+    if scoped_exit_code is not None:
+        return scoped_exit_code
+
+    print("MindStream — Reel Generation\n")
+
     try:
-        gen = ReelGenerator()
-        print(f"{gen.GREEN}✓{gen.RESET} Environment ready\n")
+        gen = ReelGenerator(
+            preset=args.preset, recalibrate_presets=args.recalibrate_presets
+        )
+        print(f"Preset: {args.preset.title()}\n")
     except ValueError as e:
-        print(f"{gen.RED}✗{gen.RESET} Environment check failed\n")
+        print("\033[91m✗\033[0m Environment check failed\n")
         print(f"Error: {e}", file=sys.stderr)
         return 1
 
@@ -913,8 +1487,12 @@ def main() -> int:
         except json.JSONDecodeError as e:
             print(f"Invalid --context JSON: {e}", file=sys.stderr)
             return 1
-        print(f"Job   : {args.job_id} | {args.emotion.title()} | {ctx.get('user_name', 'User')}\n")
-        result = gen.generate_reel(job_id=args.job_id, emotion=args.emotion, context=ctx, header=False)
+        print(
+            f"Job   : {args.job_id} | {args.emotion.title()} | {ctx.get('user_name', 'User')}\n"
+        )
+        result = gen.generate_reel(
+            job_id=args.job_id, emotion=args.emotion, context=ctx, header=False
+        )
     else:
         sample = "data/sample_emotion_result.json"
         if not os.path.exists(sample):
@@ -923,12 +1501,14 @@ def main() -> int:
         print(f"Input : {sample}")
         with open(sample) as fh:
             data = json.load(fh)
-        print(f"Job   : {data['job_id']} | {data['emotion']['label'].title()} | {data['context'].get('user_name', 'User')}\n")
+        print(
+            f"Job   : {data['job_id']} | {data['emotion']['label'].title()} | {data['context'].get('user_name', 'User')}\n"
+        )
         result = gen.generate_reel(
             job_id=data["job_id"],
             emotion=data["emotion"]["label"],
             context=data["context"],
-            header=False
+            header=False,
         )
 
     elapsed = time.time() - start_time
@@ -943,6 +1523,7 @@ def main() -> int:
         print(f"{gen.RED}✗{gen.RESET} Reel generation failed", file=sys.stderr)
         print(f"Error: {result['error']}", file=sys.stderr)
         return 1
+
 
 if __name__ == "__main__":
     sys.exit(main())
