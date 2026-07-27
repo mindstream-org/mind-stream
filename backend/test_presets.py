@@ -8,6 +8,7 @@ from reel_generator import (
     HardwareProfile,
     PRESETS,
     _candidate_worker_counts,
+    _normal_cpu_quota_percent,
     _resolve_preset,
 )
 
@@ -28,7 +29,7 @@ class PresetResolutionTests(unittest.TestCase):
         self.assertEqual(normal["ffmpeg_threads"], 1)
         self.assertEqual(normal["cpu_affinity"], ())
         self.assertGreater(normal["niceness"], 0)
-        self.assertEqual(normal["cpu_quota_percent"], 60)
+        self.assertEqual(normal["cpu_quota_percent"], 150)
         self.assertEqual(normal["frame_size"], (720, 1280))
         self.assertEqual(normal["target_fps"], 24)
 
@@ -110,6 +111,15 @@ class PresetResolutionTests(unittest.TestCase):
             return_value=CALIBRATION_WORKER_MEMORY_BYTES,
         ):
             self.assertEqual(_candidate_worker_counts(hardware), (1,))
+
+    def test_normal_quota_scales_down_for_smaller_hardware(self):
+        one_core = HardwareProfile(logical_cpus=(0,), physical_core_groups=((0,),))
+        two_cores = HardwareProfile(
+            logical_cpus=(0, 1, 2, 3), physical_core_groups=((0, 2), (1, 3))
+        )
+
+        self.assertEqual(_normal_cpu_quota_percent(one_core), 100)
+        self.assertEqual(_normal_cpu_quota_percent(two_cores), 100)
 
     def test_presets_use_the_same_output_profile(self):
         self.assertEqual(PRESETS["fast"]["frame_size"], PRESETS["normal"]["frame_size"])
