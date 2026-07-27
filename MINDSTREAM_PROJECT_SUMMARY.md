@@ -107,7 +107,7 @@ graph TD
         LLM[Gemini API: Script Generator]
         TTS[TTS Engine: edge-tts or KittenTTS]
         Assets[(Asset Library: bg videos + ambient audio)]
-        Compositor[MoviePy: Video Compositor]
+        Compositor[MovieLite / FFmpeg: Video Compositor]
         
         JobQueue -- reads emotion result --> MLWorker
         JobQueue -- sends emotion + context --> LLM
@@ -139,9 +139,9 @@ graph TD
 - **Script Generation (Phase 3):** Google Gemini (`gemini-3.5-flash`) — returns a structured JSON payload with `script` (full spoken text) and `subtitles` (array of short display phrases) in a single API call, eliminating the need for a separate transcription step.
 - **TTS (Phase 3):** Xiaomi MiMo API (`mimo-v2.5-tts`, voice `Dean`) via `/v1/chat/completions`. Audio returned as base64-encoded MP3 in the response body — no streaming required.
 - **Subtitle Timing (Phase 3):** Purely local, proportional word-count distribution. Total TTS audio duration (read via `AudioFileClip.duration`) is divided across subtitle phrases proportionally by word count. Subtitles start at 0s with no delay, keeping them synced with the near-zero-latency MiMo TTS. Pause-weighting adds ~15% extra time to phrases ending with sentence punctuation (`.`, `!`, `?`, `…`). No upload to Gemini, no Whisper, no AssemblyAI — free-tier safe.
-- **Subtitle Rendering:** MoviePy `SubtitlesClip` overlaid at vertical position `1700` (bottom ~11% of 1920px frame), font size `80`, uppercase, yellow text (`#FFFF00`) with black 3px stroke.
+- **Subtitle Rendering:** Subtitles overlaid using MovieLite/FFmpeg compositor at bottom of frame, uppercase, yellow text (`#FFFF00`) with black stroke.
 - **Video Search:** Pexels API with cinematic/moody query terms extracted by Gemini from the script. Fallback terms (`moody nature`, `dusk calm`, `foggy forest`) used if primary queries return no results.
-- **Media Rendering (Phase 3):** Python + `MoviePy`/`FFmpeg`, compositing Pexels-sourced video clips + Xiaomi MiMo TTS audio + ambient audio (15% volume) + proportional subtitles into a 9:16 (1080×1920) MP4.
+- **Media Rendering (Phase 3):** Python + `MovieLite`/`FFmpeg` (4x faster than MoviePy with support for `normal` background preset and `fast` multi-worker preset), compositing Pexels-sourced video clips + Edge-TTS/MiMo audio + ambient audio (15% volume) + proportional subtitles into a 9:16 (720×1280 or 1080×1920) MP4.
 - **Asset Library:** A local folder (`assets/audio/`) of ambient audio tracks organised by emotion. Background videos are fetched dynamically from Pexels per generation (no pre-built video library needed).
 
 ## 7. Detailed Implementation Workflow
@@ -306,7 +306,7 @@ const assets = ASSET_MAP[emotion.label] || ASSET_MAP["neutral"];
 
 **Sourcing:** Pexels, Pixabay (free stock footage), or AI-generated (RunwayML, etc.)
 
-#### 3.4: Video Composition (MoviePy)
+#### 3.4: Video Composition (MovieLite)
 **File:** `backend/workers/reel_compositor.py`
 
 ```python
@@ -352,7 +352,7 @@ generate_reel(
 - Duration distributed across phrases proportionally by word count (not character count)
 - Negative lead offset (-0.15s) ensures subtitles appear slightly before audio
 - Sentence-ending punctuation gets ~15% extra duration for natural pauses
-- SRT written to `output/audio/<job_id>.srt`, loaded by MoviePy `SubtitlesClip`
+- SRT written to `output/audio/<job_id>.srt`, loaded by MovieLite subtitle overlays
 - Rendered as uppercase yellow text (`#FFFF00`), font size 80, black 3px stroke
 - Positioned at y=1700 (bottom ~11% of 1920px frame)
 - **No upload to Gemini files API, no Whisper, no AssemblyAI — free-tier safe**
@@ -524,7 +524,7 @@ Extension polls `GET /jobs/:id`, sees `status: "ready"`, fires notification.
 - [ ] Install dependencies: `moviepy`, `edge-tts` (or `kittentts`)
 - [ ] Generate TTS from script → `test_audio.wav`
 - [ ] Create a test asset: `assets/backgrounds/frustrated.mp4` (download from Pexels)
-- [ ] Composite with MoviePy → output `test_reel.mp4`
+- [ ] Composite with MovieLite → output `test_reel.mp4`
 - [ ] Verify: 9:16 video, ~30-40s duration, audio plays correctly
 
 **Success criteria:** Can generate a watchable reel from hardcoded inputs.
@@ -580,7 +580,7 @@ Extension polls `GET /jobs/:id`, sees `status: "ready"`, fires notification.
 - ✅ Xiaomi MiMo TTS (`Dean` voice) generates MP3 audio
 - ✅ Pexels API fetches dynamic cinematic video clips based on Gemini-extracted keywords
 - ✅ Proportional local subtitle timing with negative lead offset — no STT/transcription/upload
-- ✅ MoviePy composites clips + TTS + ambient audio + subtitles into 9:16 MP4
+- ✅ MovieLite composites clips + TTS + ambient audio + subtitles into 9:16 MP4
 - ✅ Subtitles positioned at y=1700 (bottom of frame), font size 80
 - ✅ Job status updated to `ready` or `failed` accordingly
 - ✅ DNF-style progress display with:
