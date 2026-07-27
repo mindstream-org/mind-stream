@@ -195,6 +195,27 @@ function createReadyNotification() {
 }
 
 /** Polls the local backend for job completion (project summary §7, Phase 3). */
+let activePollTimeout = null;
+
+async function pollActiveJob() {
+  if (activePollTimeout) {
+    clearTimeout(activePollTimeout);
+    activePollTimeout = null;
+  }
+
+  const cycle = await getCycle();
+  if (cycle.cycle_status !== CYCLE_STATUS.PENDING || !cycle.job_id) {
+    return;
+  }
+
+  await handleJobPoll();
+
+  const nextCycle = await getCycle();
+  if (nextCycle.cycle_status === CYCLE_STATUS.PENDING && nextCycle.job_id) {
+    activePollTimeout = setTimeout(pollActiveJob, 3000);
+  }
+}
+
 async function handleJobPoll() {
   const cycle = await getCycle();
   if (cycle.cycle_status !== CYCLE_STATUS.PENDING || !cycle.job_id) {
@@ -214,6 +235,10 @@ async function handleJobPoll() {
 
     if (data.status === "ready") {
       chrome.alarms.clear(ALARM_NAMES.JOB_POLL);
+      if (activePollTimeout) {
+        clearTimeout(activePollTimeout);
+        activePollTimeout = null;
+      }
       await setCycle({
         cycle_status: CYCLE_STATUS.READY,
         reel_url: data.reel_url ?? null,
@@ -223,6 +248,10 @@ async function handleJobPoll() {
       createReadyNotification();
     } else if (data.status === "failed") {
       chrome.alarms.clear(ALARM_NAMES.JOB_POLL);
+      if (activePollTimeout) {
+        clearTimeout(activePollTimeout);
+        activePollTimeout = null;
+      }
       await setCycle({
         cycle_status: CYCLE_STATUS.FAILED,
         error_message: data.error ?? "Something went wrong while generating your reel.",
@@ -243,6 +272,13 @@ async function handleJobPoll() {
     console.warn("job poll failed:", err);
   }
 }
+
+// Check on worker startup if a job was already in progress
+getCycle().then((cycle) => {
+  if (cycle.cycle_status === CYCLE_STATUS.PENDING && cycle.job_id) {
+    pollActiveJob();
+  }
+});
 
 // --- Notification clicks --------------------------------------------------
 chrome.notifications.onClicked.addListener(async (notificationId) => {
@@ -358,6 +394,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         
         // 4. Update the cycle status with job_id and clip_path
         await setCycle({ clip_path: message.clipPath, job_id: data.job_id });
+        pollActiveJob();
       } catch (err) {
         console.error("[background] Failed to check-in with Express server:", err);
         await setCycle({
