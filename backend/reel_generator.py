@@ -49,8 +49,11 @@ warnings.filterwarnings("ignore", message=".*fontconfig.*")
 warnings.filterwarnings("ignore", message=".*resource_tracker.*")
 import logging
 
-logging.getLogger("movielite").setLevel(logging.ERROR)
-logging.getLogger("movielite").propagate = False
+logging.basicConfig(level=logging.ERROR)
+for logger_name in ["movielite", "moviepy", "imageio", "urllib3", "google", "httpx", "httpcore"]:
+    _l = logging.getLogger(logger_name)
+    _l.setLevel(logging.ERROR)
+    _l.propagate = False
 
 import contextlib
 
@@ -202,14 +205,11 @@ def _resolve_preset(preset: str, hardware: HardwareProfile) -> Dict[str, Any]:
         )
         return config
 
-    # This is a safe first-run fallback. Calibration replaces it with a measured
-    # result once real footage is available. Memory headroom is included here so
-    # Fast never starts more workers than the calibrator considers safe.
-    fast_worker_limit = min(2, max(_candidate_worker_counts(hardware)))
+    # Fast preset uses multi-worker rendering and full physical core count for FFmpeg encoding
+    fast_worker_limit = max(2, min(4, hardware.physical_core_count))
     config.update(
         writer_processes=fast_worker_limit,
-        # Measured scaling improves through two encoder threads but not beyond.
-        ffmpeg_threads=min(2, hardware.physical_core_count),
+        ffmpeg_threads=max(2, hardware.physical_core_count),
         cpu_affinity=(),
         niceness=0,
     )
@@ -1340,7 +1340,12 @@ No explanation, no markdown — just the raw JSON array."""
         return f"{desc:<25} {color}{percentage:3.0f}% |{bar}| {current}/{total}{self.RESET}"
 
     def generate_reel(
-        self, job_id: str, emotion: str, context: Dict[str, Any], header: bool = True
+        self,
+        job_id: str,
+        emotion: str,
+        context: Dict[str, Any],
+        header: bool = True,
+        output_filename: Optional[str] = None,
     ) -> Dict[str, Any]:
         result: Dict[str, Any] = {
             "success": False,
@@ -1415,10 +1420,10 @@ No explanation, no markdown — just the raw JSON array."""
                     f"{self.GREEN}✓{self.RESET} {desc}{self.GREEN}100% |{'━' * 20}| 1/1{self.RESET}\n"
                 )
 
-            # Phase 4: Timeline preparation
             self._print_step(4, 5, "Preparing final composition")
             self._configure_calibrated_workers(video_paths[0])
-            reel_path = os.path.join(self.output_dir, "reels", f"{job_id}.mp4")
+            reel_name = output_filename if output_filename else f"{job_id}.mp4"
+            reel_path = os.path.join(self.output_dir, "reels", reel_name)
             ambient_path = self.ambient_music.get(
                 emotion, self.ambient_music.get("neutral")
             )
@@ -1462,6 +1467,7 @@ def main() -> int:
     parser.add_argument("--job-id", required=False, help="Job ID")
     parser.add_argument("--emotion", required=False, help="Emotion label")
     parser.add_argument("--context", required=False, help="Context JSON string")
+    parser.add_argument("--output-filename", required=False, help="Output MP4 filename")
     parser.add_argument(
         "--preset",
         required=False,
@@ -1504,7 +1510,7 @@ def main() -> int:
             f"Job   : {args.job_id} | {args.emotion.title()} | {ctx.get('user_name', 'User')}\n"
         )
         result = gen.generate_reel(
-            job_id=args.job_id, emotion=args.emotion, context=ctx, header=False
+            job_id=args.job_id, emotion=args.emotion, context=ctx, header=False, output_filename=args.output_filename
         )
     else:
         sample = "data/sample_emotion_result.json"
