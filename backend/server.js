@@ -6,12 +6,33 @@ const os = require('os');
 const { spawn } = require('child_process');
 const chokidar = require('chokidar');
 
+// Load environment variables from backend/.env if present so process.env has keys
+const envPath = path.join(__dirname, '.env');
+if (fs.existsSync(envPath)) {
+  const envConfig = fs.readFileSync(envPath, 'utf8');
+  for (const line of envConfig.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eqIdx = trimmed.indexOf('=');
+    if (eqIdx > 0) {
+      const key = trimmed.slice(0, eqIdx).trim();
+      const value = trimmed.slice(eqIdx + 1).trim().replace(/^["']|["']$/g, '');
+      if (key && !process.env[key]) {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
 const app = express();
 app.use(cors());
 app.use(express.json());
 
 // In-memory job state tracker
 const jobs = {};
+
+// Active single job tracking
+let activeJobId = null;
 
 const REEL_PRESET = process.env.MINDSTREAM_REEL_PRESET || 'normal';
 if (!['normal', 'fast'].includes(REEL_PRESET)) {
@@ -32,10 +53,59 @@ try {
   console.error(`[server] Failed to create capture folder: ${err.message}`);
 }
 
+/**
+ * Safely cancels a running or pending job and terminates its spawned Python process.
+ */
+function cancelJob(jobId, reason = 'Job cancelled by user') {
+  const job = jobs[jobId];
+  if (!job) return;
+
+  if (job.status === 'cancelled') return;
+
+  console.log(`[server] Cancelling Job ${jobId}: ${reason}`);
+
+  if (job.process) {
+    try {
+      job.process.kill('SIGTERM');
+    } catch (err) {
+      console.error(`[server] Error killing process for Job ${jobId}: ${err.message}`);
+    }
+    job.process = null;
+  }
+
+  job.status = 'cancelled';
+  job.cancelled_at = new Date().toISOString();
+  job.error = reason;
+
+  if (activeJobId === jobId) {
+    activeJobId = null;
+  }
+}
+
 // Helper to run reel generator Python script
-function triggerReelGeneration(jobId, emotion, context) {
-  console.log(`[server] Spawning ${REEL_PRESET} reel worker for Job ${jobId} (Emotion: ${emotion})...`);
-  jobs[jobId].status = 'processing_reel';
+function triggerReelGeneration(jobId, emotion, context, preset) {
+  const job = jobs[jobId];
+  if (!job || job.status === 'cancelled') {
+    console.log(`[server] Skipping generation for cancelled/missing Job ${jobId}`);
+    return;
+  }
+
+  // Enforce single active job: cancel any other running job
+  if (activeJobId && activeJobId !== jobId && jobs[activeJobId] && ['processing_emotion', 'processing_reel'].includes(jobs[activeJobId].status)) {
+    cancelJob(activeJobId, 'Superseded by new job generation');
+  }
+
+  activeJobId = jobId;
+  const selectedPreset = preset || job.preset || REEL_PRESET;
+  console.log(`[server] Spawning ${selectedPreset} reel worker for Job ${jobId} (Emotion: ${emotion})...`);
+  job.status = 'processing_reel';
+
+  // Construct clean, human-readable reel filename
+  const now = new Date();
+  const dateStr = now.toISOString().slice(0, 10);
+  const timeStr = now.toTimeString().slice(0, 8).replace(/:/g, '-');
+  const cleanFilename = `mindstream_${dateStr}_${timeStr}_${emotion.toLowerCase()}.mp4`;
+  job.reel_filename = cleanFilename;
 
   const contextStr = JSON.stringify(context);
   const pythonPath = path.join(__dirname, 'venv', 'bin', 'python');
@@ -46,29 +116,43 @@ function triggerReelGeneration(jobId, emotion, context) {
     '--job-id', jobId,
     '--emotion', emotion,
     '--context', contextStr,
-    '--preset', REEL_PRESET
+    '--preset', selectedPreset,
+    '--output-filename', cleanFilename
   ], {
-    cwd: __dirname
+    cwd: __dirname,
+    // PYTHONUNBUFFERED=1 forces Python stdout/stderr to flush immediately line-by-line
+    env: { ...process.env, PYTHONUNBUFFERED: '1' }
   });
 
-  // Pipe Python stdout straight to the server terminal so you can follow progress
+  job.process = worker;
+
+  // Stream python stdout directly to terminal without prepending [reel:xxxx]
   worker.stdout.on('data', (data) => {
-    process.stdout.write(`[reel:${jobId.slice(0,8)}] ${data}`);
+    if (job.status === 'cancelled') return;
+    process.stdout.write(data);
   });
 
   let stderrBuf = '';
   worker.stderr.on('data', (data) => {
+    if (job.status === 'cancelled') return;
     stderrBuf += data.toString();
-    // Also print stderr live so tracebacks appear immediately
-    process.stderr.write(`[reel:${jobId.slice(0,8)}:ERR] ${data}`);
+    process.stderr.write(data);
   });
 
   worker.on('close', (code) => {
+    job.process = null;
+
+    if (job.status === 'cancelled') {
+      console.log(`[server] Job ${jobId} worker process terminated (cancelled).`);
+      return;
+    }
+
     if (code === 0) {
-      console.log(`[server] ✓ Reel ready for Job ${jobId}`);
+      console.log(`[server] ✓ Reel ready for Job ${jobId} -> ${cleanFilename}`);
       jobs[jobId] = {
+        ...jobs[jobId],
         status: 'ready',
-        reel_url: `http://localhost:4000/reels/${jobId}.mp4`,
+        reel_url: `http://localhost:4000/reels/${cleanFilename}`,
         emotion_label: emotion,
         completed_at: new Date().toISOString()
       };
@@ -76,29 +160,42 @@ function triggerReelGeneration(jobId, emotion, context) {
       const snippet = stderrBuf.slice(-400);
       console.error(`[server] ✗ Reel worker exited with code ${code}`);
       jobs[jobId] = {
+        ...jobs[jobId],
         status: 'failed',
         error: `Worker exited ${code}: ${snippet}`,
         completed_at: new Date().toISOString()
       };
+    }
+
+    if (activeJobId === jobId) {
+      activeJobId = null;
     }
   });
 }
 
 // POST /check-in
 app.post('/check-in', (req, res) => {
-  const { session_id, context, clip_path } = req.body;
+  const { session_id, context, clip_path, preset } = req.body;
   if (!session_id) {
     return res.status(400).json({ error: 'Missing session_id' });
   }
 
-  console.log(`[server] New check-in request. Session ID: ${session_id}, Clip: ${clip_path}`);
+  // Cancel any existing running job to ensure single active generation session
+  if (activeJobId && activeJobId !== session_id && jobs[activeJobId] && ['processing_emotion', 'processing_reel'].includes(jobs[activeJobId].status)) {
+    cancelJob(activeJobId, 'Superseded by new check-in session');
+  }
 
-  // Create job entry
+  activeJobId = session_id;
+  const selectedPreset = preset || REEL_PRESET;
+  console.log(`[server] New check-in request. Session ID: ${session_id}, Preset: ${selectedPreset}, Clip: ${clip_path}`);
+
   jobs[session_id] = {
     status: 'processing_emotion',
     context: context || {},
     clip_path: clip_path || null,
-    created_at: new Date().toISOString()
+    preset: selectedPreset,
+    created_at: new Date().toISOString(),
+    process: null
   };
 
   // Check if we already received the emotion detection result for this clip file
@@ -110,12 +207,30 @@ app.post('/check-in', (req, res) => {
       delete pendingResults[baseName];
 
       if (result.emotion && result.emotion.label) {
-        triggerReelGeneration(session_id, result.emotion.label, context);
+        triggerReelGeneration(session_id, result.emotion.label, context, selectedPreset);
+        res.json({ job_id: session_id });
+        return;
       } else {
         jobs[session_id].status = 'failed';
         jobs[session_id].error = result.error || 'Emotion detection failed';
+        res.json({ job_id: session_id });
+        return;
       }
     }
+  }
+
+  // Development Fallback: If no real Phase 2 (friend's script) writes a _result.json
+  // within 2 seconds, auto-generate a fallback emotion so testing works end-to-end.
+  if (process.env.MINDSTREAM_MOCK_EMOTION !== 'false') {
+    setTimeout(() => {
+      const job = jobs[session_id];
+      if (job && job.status === 'processing_emotion') {
+        const mockEmotions = ['neutral', 'anxious', 'fatigued', 'distracted', 'frustrated'];
+        const fallbackEmotion = mockEmotions[Math.floor(Math.random() * mockEmotions.length)];
+        console.log(`[server] [Phase 2 Simulation] No Phase 2 result JSON detected yet. Auto-generating mock emotion '${fallbackEmotion}' for Job ${session_id}...`);
+        triggerReelGeneration(session_id, fallbackEmotion, context, selectedPreset);
+      }
+    }, 2000);
   }
 
   res.json({ job_id: session_id });
@@ -127,10 +242,35 @@ app.get('/jobs/:id', (req, res) => {
   if (!job) {
     return res.status(404).json({ error: 'Job not found' });
   }
-  res.json(job);
+  const { process: _proc, ...jobData } = job;
+  res.json(jobData);
 });
 
-// Serve compiled reel assets
+// POST /jobs/:id/cancel
+app.post('/jobs/:id/cancel', (req, res) => {
+  const jobId = req.params.id;
+  const job = jobs[jobId];
+  if (!job) {
+    return res.status(404).json({ error: 'Job not found' });
+  }
+  cancelJob(jobId, 'Cancelled via API request');
+  res.json({ status: 'cancelled', job_id: jobId });
+});
+
+// GET /health — returns server status and which required API keys are configured.
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    keys: {
+      gemini:  !!process.env.GEMINI_API_KEY,
+      pexels:  !!process.env.PEXELS_API_KEY,
+      mimo:    !!process.env.MIMO_API_KEY,
+      groq:    !!process.env.GROQ_API_KEY,     // optional
+      pixabay: !!process.env.PIXABAY_API_KEY,  // optional
+    },
+  });
+});
+
 app.use('/reels', express.static(path.join(__dirname, 'output', 'reels')));
 
 // Start the Chokidar directory watcher (watching for Phase 2 result JSON files)
@@ -139,28 +279,29 @@ chokidar.watch(CAPTURE_FOLDER, { ignored: /capture_.*\.webm$/ })
     if (!filePath.endsWith('_result.json')) return;
 
     console.log(`[server] Detected new result JSON file: ${filePath}`);
-    const baseName = path.basename(filePath, '_result.json'); // e.g. capture_2026-07-18T10-45-00
+    const baseName = path.basename(filePath, '_result.json');
 
     try {
       const fileContent = fs.readFileSync(filePath, 'utf-8');
       const result = JSON.parse(fileContent);
 
-      // Find the corresponding check-in job
       const jobId = Object.keys(jobs).find(id => {
         const job = jobs[id];
         return job.clip_path && job.clip_path.includes(baseName);
       });
 
       if (jobId) {
-        console.log(`[server] Found matching job ${jobId} for result: ${baseName}`);
-        if (result.emotion && result.emotion.label) {
-          triggerReelGeneration(jobId, result.emotion.label, jobs[jobId].context);
-        } else {
-          jobs[jobId].status = 'failed';
-          jobs[jobId].error = result.error || 'Emotion detection failed';
+        const job = jobs[jobId];
+        if (job && job.status !== 'cancelled') {
+          console.log(`[server] Found matching job ${jobId} for result: ${baseName}`);
+          if (result.emotion && result.emotion.label) {
+            triggerReelGeneration(jobId, result.emotion.label, job.context, job.preset);
+          } else {
+            job.status = 'failed';
+            job.error = result.error || 'Emotion detection failed';
+          }
         }
       } else {
-        // Cache it, in case the extension check-in payload POST hasn't completed yet
         console.log(`[server] Job not found for result: ${baseName}. Pre-caching result...`);
         pendingResults[baseName] = result;
       }
