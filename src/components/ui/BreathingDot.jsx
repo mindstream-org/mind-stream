@@ -1,21 +1,19 @@
-const SPEED_BY_STATE = {
-  idle: "3.2s",
-  skeleton: "2s",
-  capture: "0.6s",
-  countdown: "0.4s",
-  ready: "1.6s",
-  player: "3.2s",
-  error: "0s",
+const DURATION = {
+  idle:    "4s",
+  pending: "1.6s",
+  ready:   "2.4s",
+  error:   "0s",
+  player:  "4s",
 };
 
 export default function BreathingDot({ state = "idle" }) {
-  const duration = SPEED_BY_STATE[state] ?? "3.2s";
+  const duration = DURATION[state] ?? "4s";
   return (
     <div
-      className="w-1.75 h-1.75 rounded-full bg-teal animate-breathe"
+      className="w-1.5 h-1.5 rounded-full bg-fg-subtle animate-breathe shrink-0"
       style={{
         animationDuration: duration,
-        opacity: state === "error" ? 0.3 : undefined,
+        opacity: state === "error" ? 0.15 : undefined,
       }}
     />
   );

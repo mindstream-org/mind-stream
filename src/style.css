@@ -1,74 +1,49 @@
 @import "tailwindcss";
 
-/* ---------------------------------------------------------------------
-   Design tokens — the "film-strip" system from the side panel mockup.
-   Defining these in @theme makes Tailwind generate matching utilities
-   automatically: bg-ink, text-teal, border-hairline, font-mono, etc.
---------------------------------------------------------------------- */
+/* -----------------------------------------------------------------------
+   MindStream design tokens — fully achromatic, shadcn-aligned.
+   Zinc-based neutral dark + white-forward typography.
+----------------------------------------------------------------------- */
 @theme {
-  --color-ink: #14171a;
-  --color-panel: #1b1f23;
-  --color-panel-raised: #23282d;
-  --color-hairline: #2e343a;
+  /* Backgrounds */
+  --color-bg:             #09090b;   /* zinc-950 — matches logo background */
+  --color-surface:        #111113;   /* subtle elevation */
+  --color-surface-raised: #1c1c1f;   /* cards, inputs */
 
-  --color-teal: #4ebfb3;
-  --color-teal-soft: rgba(78, 191, 179, 0.14);
+  /* Borders */
+  --color-border:         #27272a;   /* zinc-800 */
+  --color-border-subtle:  #18181b;   /* zinc-900 */
 
-  --color-amber: #ffb454;
-  --color-amber-soft: rgba(255, 180, 84, 0.14);
+  /* Foregrounds */
+  --color-fg:             #fafafa;   /* zinc-50 — matches logo line art */
+  --color-fg-muted:       #a1a1aa;   /* zinc-400 */
+  --color-fg-subtle:      #52525b;   /* zinc-600 */
 
-  --color-coral: #e8735f;
-  --color-coral-soft: rgba(232, 115, 95, 0.14);
+  /* Primary action (shadcn-style: white button, dark text) */
+  --color-primary:        #ffffff;
+  --color-primary-fg:     #09090b;
 
-  --color-fog: #8a93a0;
-  --color-fog-dim: #5c6570;
-  --color-paper: #f2f4f6;
+  /* Status — used sparingly, only for error/warning callouts */
+  --color-destructive:    #f87171;   /* red-400 */
+  --color-warning:        #fbbf24;   /* amber-400 */
 
+  /* Typography */
   --font-sans: "Inter", system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, monospace;
 
+  /* Animations */
   --animate-breathe: breathe 3.2s ease-in-out infinite;
-  --animate-shimmer: shimmer 1.6s linear infinite;
-  --animate-blink: blink 1s step-start infinite;
-  --animate-fadein: fadein 0.35s ease;
+  --animate-fadein:  fadein 0.25s ease;
 }
 
 @keyframes breathe {
-  0%,
-  100% {
-    transform: scale(1);
-    opacity: 0.7;
-  }
-  50% {
-    transform: scale(1.5);
-    opacity: 1;
-  }
-}
-
-@keyframes shimmer {
-  0% {
-    background-position: 150% 0;
-  }
-  100% {
-    background-position: -50% 0;
-  }
-}
-
-@keyframes blink {
-  50% {
-    opacity: 0.2;
-  }
+  0%, 100% { transform: scale(1);   opacity: 0.4; }
+  50%       { transform: scale(1.6); opacity: 1;   }
 }
 
 @keyframes fadein {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
+  from { opacity: 0; transform: translateY(3px); }
+  to   { opacity: 1; transform: none; }
 }
 
 html,

@@ -8,14 +8,14 @@ import Button from "../../components/ui/Button.jsx";
 export default function ConfirmState({ blobUrl, onAccept, onDecline }) {
   return (
     <div className="flex flex-col h-full animate-fadein">
-      <div className="font-mono text-[11px] tracking-[0.12em] uppercase text-fog-dim mb-2.5">
+      <div className="font-mono text-[10.5px] tracking-[0.14em] uppercase text-teal mb-2">
         Got it
       </div>
-      <h1 className="text-[22px] font-bold leading-tight mb-2.5 tracking-[-0.01em]">
+      <h1 className="text-[21px] font-bold leading-tight mb-3 tracking-[-0.02em]">
         Use this one?
       </h1>
 
-      <div className="w-full flex-1 min-h-0 rounded-[14px] border border-hairline relative mb-4 flex items-center justify-center overflow-hidden bg-[radial-gradient(circle_at_50%_35%,#2A3138,#171B1E_75%)]">
+      <div className="w-full flex-1 min-h-0 rounded-[14px] border border-hairline relative mb-4 flex items-center justify-center overflow-hidden bg-[#12161A]">
         <video
           src={blobUrl}
           autoPlay
@@ -26,7 +26,7 @@ export default function ConfirmState({ blobUrl, onAccept, onDecline }) {
         />
       </div>
 
-      <p className="text-[13.5px] leading-relaxed text-fog mb-2">
+      <p className="text-[13px] leading-relaxed text-fog mb-4">
         Nothing's been sent yet. Say the word and we'll turn this into your reel.
       </p>
 

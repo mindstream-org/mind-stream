@@ -1,62 +1,60 @@
-import Button from "../../components/ui/Button.jsx";
-import ProgressBar from "../../components/ui/ProgressBar.jsx";
+import { useState, useEffect, useRef } from "react";
+import { X } from "lucide-react";
 
-export default function PlayerState({ reelUrl, caption, onDone }) {
+export default function PlayerState({ reelUrl, onDone }) {
+  const [visible, setVisible] = useState(true);
+  const timerRef = useRef(null);
+
+  const handleMouseMove = () => {
+    setVisible(true);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => setVisible(false), 2500);
+  };
+
+  useEffect(() => {
+    timerRef.current = setTimeout(() => setVisible(false), 2500);
+    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+  }, []);
+
   return (
-    <div className="flex flex-col h-full animate-fadein">
-      <div className="w-full aspect-[9/16] rounded-[14px] border border-hairline bg-[linear-gradient(200deg,#233A38,#101615)] relative overflow-hidden flex flex-col justify-end mb-3.5 shadow-lg">
-        <div className="absolute top-3 left-3 right-3 z-10 flex items-center justify-between pointer-events-auto">
-          <span className="font-mono text-[11px] text-white/90 bg-black/50 px-2 py-0.5 rounded-full backdrop-blur-sm">
-            Focus Reset Reel
-          </span>
-          <button
-            onClick={onDone}
-            className="w-6 h-6 rounded-full bg-black/50 text-white/80 hover:text-white flex items-center justify-center font-mono text-[11px] transition-colors"
-            aria-label="Close"
-          >
-            ✕
-          </button>
+    <div
+      className="relative w-full h-full bg-black flex flex-col overflow-hidden animate-fadein"
+      onMouseMove={handleMouseMove}
+      onMouseEnter={handleMouseMove}
+    >
+      {reelUrl ? (
+        <video
+          src={reelUrl}
+          controls
+          autoPlay
+          playsInline
+          loop
+          className="absolute inset-0 w-full h-full object-cover z-0"
+        />
+      ) : (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-bg z-0">
+          <p className="text-[12px] text-fg-subtle font-mono text-center px-6">
+            Video unavailable — make sure the backend is running
+          </p>
         </div>
+      )}
 
-        {reelUrl ? (
-          <video
-            src={reelUrl}
-            controls
-            autoPlay
-            playsInline
-            loop
-            className="absolute inset-0 w-full h-full object-cover"
-          />
-        ) : (
-          <>
-            <div className="p-3.5 bg-[linear-gradient(to_top,rgba(0,0,0,0.6),transparent)] z-10">
-              <p className="text-[13px] text-paper leading-snug">
-                {caption ?? '"Two minutes. Look away from the screen and just breathe."'}
-              </p>
-            </div>
-            <ProgressBar percent={38} />
-          </>
-        )}
-      </div>
-
-      <div className="flex flex-col gap-2 mt-auto">
-        <Button variant="primary" onClick={onDone}>
-          Done — mark as viewed
-        </Button>
-
-        {reelUrl && (
-          <a
-            href={reelUrl}
-            download={`mindstream_reel_${Date.now()}.mp4`}
-            target="_blank"
-            rel="noreferrer"
-            className="w-full"
-          >
-            <Button variant="ghost" className="w-full">
-              Download Reel (MP4)
-            </Button>
-          </a>
-        )}
+      {/* Top overlay — auto-hides on inactivity */}
+      <div
+        className={`relative z-10 flex items-center justify-between p-4 bg-gradient-to-b from-black/70 to-transparent transition-opacity duration-300 ${
+          visible ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
+        }`}
+      >
+        <span className="font-mono text-[11px] font-medium text-white/80 tracking-wide">
+          mindstream
+        </span>
+        <button
+          onClick={onDone}
+          className="w-8 h-8 rounded-full bg-black/50 border border-white/10 backdrop-blur-sm flex items-center justify-center text-white/70 hover:text-white transition-colors cursor-pointer"
+          aria-label="Close player"
+        >
+          <X size={12} />
+        </button>
       </div>
     </div>
   );

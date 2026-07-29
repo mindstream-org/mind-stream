@@ -1,26 +1,38 @@
 import Button from "../../components/ui/Button.jsx";
 
 export default function ErrorState({ message, onRetry, onDismiss }) {
+  const isBackendError = message?.includes("port 4000");
+
   return (
-    <div className="flex flex-col animate-fadein">
-      <div className="w-11 h-11 rounded-full bg-coral-soft border border-coral text-coral flex items-center justify-center font-mono font-bold mb-4.5">
-        !
-      </div>
-      <div className="font-mono text-[11px] tracking-[0.12em] uppercase text-fog-dim mb-2.5">
-        Something went wrong
-      </div>
-      <h1 className="text-[22px] font-bold leading-tight mb-2.5 -tracking-[0.01em]">
-        That one didn't come together.
-      </h1>
-      <p className="text-[13.5px] leading-relaxed text-fog mb-5">
-        {message ??
-          "We hit an error while putting your reel together. You can try again now, or we'll pick it up at the next check-in."}
+    <div className="flex flex-col h-full animate-fadein">
+      <p className="font-mono text-[10px] uppercase tracking-widest text-fg-subtle mb-4 mt-1">
+        Error
       </p>
-      <div className="flex gap-2.5 mt-auto">
+      <h1 className="text-[20px] font-semibold leading-snug tracking-[-0.025em] mb-2">
+        Didn't come together.
+      </h1>
+      <p className="text-[13px] text-fg-muted leading-relaxed mb-5">
+        {message && !isBackendError
+          ? message
+          : "An error occurred while generating your reel."}
+      </p>
+
+      {isBackendError && (
+        <div className="bg-surface-raised border border-border rounded-[8px] px-4 py-3 mb-5">
+          <p className="text-[12px] text-fg-muted leading-relaxed">
+            Make sure the backend is running:{" "}
+            <code className="font-mono text-[11px] bg-bg px-1.5 py-0.5 rounded text-fg">
+              cd backend &amp;&amp; npm start
+            </code>
+          </p>
+        </div>
+      )}
+
+      <div className="flex items-center gap-3 mt-auto">
         <Button variant="primary" className="flex-1" onClick={onRetry}>
-          Retry now
+          Try again
         </Button>
-        <Button variant="ghost" onClick={onDismiss}>
+        <Button variant="subtle" onClick={onDismiss}>
           Dismiss
         </Button>
       </div>
