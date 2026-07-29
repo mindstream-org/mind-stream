@@ -5,12 +5,15 @@ import PendingState from "./states/PendingState.jsx";
 import ReadyState from "./states/ReadyState.jsx";
 import PlayerState from "./states/PlayerState.jsx";
 import ErrorState from "./states/ErrorState.jsx";
+import OnboardingState from "./states/OnboardingState.jsx";
 import { useCycleStatus } from "../hooks/useCycleStatus.js";
+import { useSettings } from "../hooks/useSettings.js";
 import { closeSidePanel, sendMessage } from "../lib/chromeApi.js";
 import { CYCLE_STATUS, PANEL_STATE, MESSAGE_TYPES } from "../lib/constants.js";
 
 export default function SidePanel() {
   const { cycle, setCycle } = useCycleStatus();
+  const { settings, updateSettings, loaded: settingsLoaded } = useSettings();
   const [playing, setPlaying] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
 
@@ -45,8 +48,15 @@ export default function SidePanel() {
     });
   };
 
-  const handleLater = () => {
-    closeSidePanel();
+  const handleDismissReel = () => {
+    setPlaying(false);
+    setCycle({
+      cycle_status: CYCLE_STATUS.IDLE,
+      job_id: null,
+      clip_path: null,
+      reel_url: null,
+      emotion_label: null,
+    });
   };
 
   const handleRetry = () => {
@@ -62,6 +72,19 @@ export default function SidePanel() {
     sendMessage({ type: MESSAGE_TYPES.CANCEL_GENERATION });
   };
 
+  // Render onboarding wizard for first-time users
+  if (settingsLoaded && !settings.onboarding_complete) {
+    return (
+      <PanelShell state={PANEL_STATE.IDLE}>
+        <OnboardingState
+          settings={settings}
+          updateSettings={updateSettings}
+          onComplete={() => updateSettings({ onboarding_complete: true })}
+        />
+      </PanelShell>
+    );
+  }
+
   // --- Resolve which visual state to render ---------------------------
   let panelState = PANEL_STATE.IDLE;
   if (cycle.cycle_status === CYCLE_STATUS.FAILED) panelState = PANEL_STATE.ERROR;
@@ -75,7 +98,7 @@ export default function SidePanel() {
         <PendingState hasJobId={!!cycle.job_id} hasClipSaved={!!cycle.clip_path} onCancel={handleCancelGeneration} />
       )}
       {panelState === PANEL_STATE.READY && (
-        <ReadyState emotionLabel={cycle.emotion_label ?? "neutral"} onPlay={handlePlay} onLater={handleLater} />
+        <ReadyState emotionLabel={cycle.emotion_label ?? "neutral"} onPlay={handlePlay} onDismiss={handleDismissReel} />
       )}
       {panelState === PANEL_STATE.PLAYER && (
         <PlayerState reelUrl={cycle.reel_url} onDone={handleDone} />
