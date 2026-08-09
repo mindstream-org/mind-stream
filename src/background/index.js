@@ -15,8 +15,7 @@ chrome.sidePanel
   .setPanelBehavior({ openPanelOnActionClick: true })
   .catch((error) => console.error(error));
 
-// --- Storage helpers (background always runs in the extension context,
-// so this can talk to chrome.storage.local directly). ------------------
+// --- Storage helpers --------------------------------------------------
 const DEFAULT_CYCLE = {
   cycle_status: CYCLE_STATUS.IDLE,
   cycle_started_at: null,
@@ -25,10 +24,8 @@ const DEFAULT_CYCLE = {
   reel_url: null,
   emotion_label: null,
   error_message: null,
-  // Persisted (not an in-memory module variable!) specifically so this
-  // survives the service worker being unloaded and restarted, which
-  // happens constantly in MV3 — an in-memory tracker would silently
-  // forget about an open capture window and let a second one spawn.
+  // Persisted so it survives MV3 service worker restarts — an in-memory
+  // tracker would silently forget an open capture window and let a second spawn.
   capture_window_id: null,
 };
 
@@ -63,10 +60,9 @@ async function windowStillExists(windowId) {
 }
 
 /**
- * Moves a fresh cycle into "pending" and opens the capture window — or, if
- * one's already open for the current cycle, just focuses it instead of
- * spawning a second one. Shared by every entry point that can start a
- * check-in: the pulse notification, and the panel's own "Yes" button.
+ * Moves the cycle into "pending" and opens the capture window.
+ * If the window is already open, focuses it. If a job is already running,
+ * opens the side panel instead of spawning a second capture.
  */
 async function startCheckInCycle() {
   const cycle = await getCycle();
@@ -114,17 +110,8 @@ async function startCheckInCycle() {
   chrome.alarms.create(ALARM_NAMES.JOB_POLL, { periodInMinutes: JOB_POLL_INTERVAL_MINUTES });
 }
 
-/**
- * Registered once, at module scope — not inside startCheckInCycle, which
- * was adding a fresh duplicate listener on every single check-in.
- *
- * Self-heals the "user just clicked the window's close button" case: if
- * the capture window disappears before anything was ever submitted, the
- * cycle would otherwise be stuck showing "pending" forever with no way to
- * start over. If it closes *after* the clip was saved (clip_path is set)
- * or a job was submitted (job_id is set), that's the normal/expected
- * close — leave the cycle alone and let processing continue.
- */
+// If the capture window closes before anything was submitted, reset to idle.
+// If it closes after a clip was saved or job was submitted, that's normal — keep processing.
 chrome.windows.onRemoved.addListener(async (windowId) => {
   const cycle = await getCycle();
   if (cycle.capture_window_id !== windowId) return;
@@ -134,8 +121,7 @@ chrome.windows.onRemoved.addListener(async (windowId) => {
     await setCycle({ cycle_status: CYCLE_STATUS.IDLE, capture_window_id: null, cycle_started_at: null });
     chrome.alarms.clear(ALARM_NAMES.JOB_POLL);
   } else {
-    // Normal close — clip was saved or job is running. Clear the window
-    // id but keep the cycle in PENDING so the sidebar shows "processing".
+    // Normal close — clip was saved or job is running. Clear window id, keep cycle PENDING.
     await setCycle({ capture_window_id: null });
   }
 });
@@ -165,10 +151,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   }
 });
 
-/**
- * Implements the "prevent stacked/duplicate check-ins" logic from
- * MINDSTREAM_PROJECT_SUMMARY.md §4a.
- */
+/** Fires on each PULSE alarm tick. Prevents stacked check-ins. */
 async function handlePulseTick() {
   const cycle = await getCycle();
 
@@ -232,10 +215,6 @@ async function pollActiveJob() {
 async function handleJobPoll() {
   const cycle = await getCycle();
   if (cycle.cycle_status !== CYCLE_STATUS.PENDING || !cycle.job_id) {
-    // No active backend job to poll. If a clip is saved but no job_id,
-    // the friend's emotion-detection workflow hasn't responded yet —
-    // nothing for us to poll. The alarm stays alive in case a job_id
-    // appears later; it'll just no-op each tick.
     if (!cycle.job_id) return;
     chrome.alarms.clear(ALARM_NAMES.JOB_POLL);
     return;
@@ -307,16 +286,31 @@ chrome.notifications.onClicked.addListener(async (notificationId) => {
   }
 });
 
-/** Queries the active tab to extract category, domain, title, and mock personalization variables. */
+chrome.notifications.onButtonClicked.addListener(async (notificationId, buttonIndex) => {
+  chrome.notifications.clear(notificationId);
+
+  if (notificationId === NOTIFICATION_IDS.PULSE_PROMPT) {
+    if (buttonIndex === 0) { // "Start Check-in"
+      await startCheckInCycle();
+    }
+    // if buttonIndex === 1 ("Not Now"), we just cleared the notification
+  } else if (notificationId === NOTIFICATION_IDS.REEL_READY) {
+    if (buttonIndex === 0) { // "Watch Reel"
+      await openSidePanel();
+    }
+    // if buttonIndex === 1 ("Later"), we just cleared the notification
+  }
+});
+
+/** Queries the active tab and classifies it into a broad activity category. */
 async function getActiveTabInfo() {
   try {
     const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     if (!tab || !tab.url) return null;
-    
+
     const url = new URL(tab.url);
     const domain = url.hostname;
-    
-    // Simple classifier for college portfolio demo
+
     let category = "browsing";
     if (domain.includes("youtube.com") || domain.includes("netflix.com") || domain.includes("twitch.tv") || domain.includes("tiktok.com")) {
       category = "entertainment";
@@ -329,16 +323,8 @@ async function getActiveTabInfo() {
     } else if (domain.includes("amazon.com") || domain.includes("ebay.com") || domain.includes("shopify")) {
       category = "shopping";
     }
-    
-    return {
-      category,
-      domain,
-      title: tab.title ?? "unknown",
-      userName: "Prash",
-      weather: "chilly rain",
-      sessionDurationMinutes: Math.floor(Math.random() * 45) + 15,
-      idleMinutes: Math.floor(Math.random() * 5)
-    };
+
+    return { category, domain, title: tab.title ?? "unknown" };
   } catch (e) {
     console.error("Failed to get active tab info:", e);
     return null;
@@ -373,46 +359,38 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message?.type === MESSAGE_TYPES.CLIP_SAVED) {
-    // Save clip_path immediately so window removal knows a clip was recorded
     setCycle({ clip_path: message.clipPath });
 
-    // 1. Get active tab info and settings
     Promise.all([
       getActiveTabInfo(),
       chrome.storage.local.get(STORAGE_KEYS.SETTINGS),
     ]).then(async ([tabInfo, { [STORAGE_KEYS.SETTINGS]: settings }]) => {
-      // 2. Build check-in payload with settings
       const payload = buildCheckInPayload({ tabInfo, settings });
       payload.clip_path = message.clipPath;
-      
+
       try {
         console.log("[background] Submitting check-in to server...", payload);
-        // 3. POST payload to the server
         const response = await fetch(API_ROUTES.CHECK_IN, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify(payload)
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
         });
-        
+
         if (!response.ok) throw new Error(`Check-in request failed with status ${response.status}`);
-        const data = await response.json(); // expected: { job_id }
-        
+        const data = await response.json();
+
         console.log("[background] Check-in submitted, job ID:", data.job_id);
-        
-        // 4. Update the cycle status with job_id and clip_path
         await setCycle({ clip_path: message.clipPath, job_id: data.job_id });
         pollActiveJob();
       } catch (err) {
         console.error("[background] Failed to check-in with Express server:", err);
         await setCycle({
           cycle_status: CYCLE_STATUS.FAILED,
-          error_message: "Could not connect to the local reel generation server on port 4000. Start it by running 'npm start' in the backend directory."
+          error_message: "Could not connect to the local reel generation server on port 4000. Start it by running 'npm start' in the backend directory.",
         });
       }
     });
-    
+
     sendResponse({ ok: true });
     return true;
   }

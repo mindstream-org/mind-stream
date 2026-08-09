@@ -1,6 +1,6 @@
-# Core video processing (MovieLite - 4x faster than MoviePy)
+# Core video processing
 movielite>=0.2.2
-pictex>=0.1.0  # Required for TextClip styling
+pictex>=0.1.0
 
 # Google AI
 google-genai>=1.0.0
@@ -13,3 +13,9 @@ python-dotenv>=1.0.0
 
 # Progress indicator
 tqdm>=4.66.0
+
+# Phase 2 — Emotion inference (predict_emotion.py)
+tensorflow>=2.10.0
+tf-keras>=2.16.0        # Keras 2 compatibility shim for TF 2.16+
+Pillow>=9.0.0
+opencv-python>=4.10.0   # Face detection via Haar cascade
