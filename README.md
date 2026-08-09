@@ -1,6 +1,11 @@
+<div align="center">
+  <img src="public/assets/logo.png" alt="MindStream" width="120" />
+
 # MindStream
 
 A Chrome extension that reads your expression and generates a short personalized focus-reset reel. Three-second check-in, fully local pipeline.
+
+</div>
 
 ---
 
