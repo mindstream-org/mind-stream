@@ -56,13 +56,10 @@ python reel_generator.py
 
 `normal` is the default and is intended for background generation while the
 browser and desktop remain responsive. It renders at 720x1280/24fps with the
-balanced encoder setting. On Linux, it also runs in a hardware-aware CPU cgroup
-and at a lower scheduling priority. A four-physical-core machine receives a
-150% aggregate budget (up to one and a half CPUs), which leaves substantial
-desktop capacity without throttling the compositor and encoder into a long
-serial export.
+balanced encoder setting. On Linux, it also runs in a 60% CPU cgroup and at a
+lower scheduling priority, so an idle laptop does not keep a core fully busy.
 
-Normal intentionally uses one MovieLite worker. Its aggregate CPU quota and lower
+Normal intentionally uses one MovieLite worker. Its 60% CPU quota and lower
 scheduling priority keep it background-friendly, while Linux is free to place
 that work on any available CPU rather than pinning it to CPU 0. On the
 reference laptop, two- and three-worker exports were slower under moderate
