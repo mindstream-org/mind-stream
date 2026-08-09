@@ -140,20 +140,9 @@ chrome.windows.onRemoved.addListener(async (windowId) => {
   }
 });
 
-// --- Lifecycle: ensure recurring pulse alarm exists -------------------
-async function ensurePulseAlarm() {
-  const alarm = await chrome.alarms.get(ALARM_NAMES.PULSE);
-  if (!alarm) {
-    chrome.alarms.create(ALARM_NAMES.PULSE, { periodInMinutes: PULSE_THRESHOLD_MINUTES });
-  }
-}
-
+// --- Lifecycle: set up the recurring pulse alarm on install -----------
 chrome.runtime.onInstalled.addListener(() => {
-  ensurePulseAlarm();
-});
-
-chrome.runtime.onStartup?.addListener(() => {
-  ensurePulseAlarm();
+  chrome.alarms.create(ALARM_NAMES.PULSE, { periodInMinutes: PULSE_THRESHOLD_MINUTES });
 });
 
 // --- Alarms --------------------------------------------------------------
@@ -190,7 +179,6 @@ async function handlePulseTick() {
         iconUrl: "icons/icon-128.png",
         title: "Quick check-in?",
         message: "Want a quick snap check-in to reset your focus?",
-        buttons: [{ title: "Start Check-in" }, { title: "Not Now" }],
         priority: 1,
       });
   }
@@ -202,7 +190,6 @@ function createReadyNotification() {
     iconUrl: "icons/icon-128.png",
     title: "Your snap is ready",
     message: "Wanna have a look?",
-    buttons: [{ title: "Watch Reel" }, { title: "Later" }],
     priority: 1,
   });
 }
@@ -352,37 +339,41 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true; // keep the message channel open for the async response
   }
 
-  if (message?.type === MESSAGE_TYPES.CANCEL_CHECKIN || message?.type === MESSAGE_TYPES.CANCEL_GENERATION) {
+  if (message?.type === MESSAGE_TYPES.CANCEL_CHECKIN) {
+    // The confirm step's "Not now" — discard the clip, reset the cycle.
+    // The window closes itself; onRemoved above is a no-op by the time it
+    // fires since capture_window_id is already cleared here.
     chrome.alarms.clear(ALARM_NAMES.JOB_POLL);
-    getCycle().then((cycle) => {
-      if (cycle.job_id) {
-        fetch(API_ROUTES.CANCEL_JOB(cycle.job_id), { method: "POST" }).catch((err) =>
-          console.warn("[background] Failed to cancel job on backend:", err)
-        );
-      }
-      setCycle({
-        cycle_status: CYCLE_STATUS.IDLE,
-        capture_window_id: null,
-        cycle_started_at: null,
-        job_id: null,
-        clip_path: null,
-        error_message: null,
-      }).then(() => sendResponse({ ok: true }));
-    });
+    setCycle({
+      cycle_status: CYCLE_STATUS.IDLE,
+      capture_window_id: null,
+      cycle_started_at: null,
+      job_id: null,
+      clip_path: null,
+    }).then(() => sendResponse({ ok: true }));
+    return true;
+  }
+
+  if (message?.type === MESSAGE_TYPES.CANCEL_GENERATION) {
+    // User wants to abort the in-progress generation and start over.
+    // Reset the cycle to idle so a new check-in can begin.
+    chrome.alarms.clear(ALARM_NAMES.JOB_POLL);
+    setCycle({
+      cycle_status: CYCLE_STATUS.IDLE,
+      capture_window_id: null,
+      cycle_started_at: null,
+      job_id: null,
+      clip_path: null,
+      error_message: null,
+    }).then(() => sendResponse({ ok: true }));
     return true;
   }
 
   if (message?.type === MESSAGE_TYPES.CLIP_SAVED) {
-    // Save clip_path immediately so window removal knows a clip was recorded
-    setCycle({ clip_path: message.clipPath });
-
-    // 1. Get active tab info and settings
-    Promise.all([
-      getActiveTabInfo(),
-      chrome.storage.local.get(STORAGE_KEYS.SETTINGS),
-    ]).then(async ([tabInfo, { [STORAGE_KEYS.SETTINGS]: settings }]) => {
-      // 2. Build check-in payload with settings
-      const payload = buildCheckInPayload({ tabInfo, settings });
+    // 1. Get active tab info
+    getActiveTabInfo().then(async (tabInfo) => {
+      // 2. Build check-in payload
+      const payload = buildCheckInPayload({ tabInfo });
       payload.clip_path = message.clipPath;
       
       try {
@@ -408,7 +399,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         console.error("[background] Failed to check-in with Express server:", err);
         await setCycle({
           cycle_status: CYCLE_STATUS.FAILED,
-          error_message: "Could not connect to the local reel generation server on port 4000. Start it by running 'npm start' in the backend directory."
+          error_message: "Could not connect to the local reel generation server. Make sure it is running on port 4000."
         });
       }
     });
