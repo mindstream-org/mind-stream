@@ -13,11 +13,6 @@ app.use(express.json());
 // In-memory job state tracker
 const jobs = {};
 
-const REEL_PRESET = process.env.MINDSTREAM_REEL_PRESET || 'normal';
-if (!['normal', 'fast'].includes(REEL_PRESET)) {
-  throw new Error("MINDSTREAM_REEL_PRESET must be 'normal' or 'fast'");
-}
-
 // Cache for results written before check-in call finishes (to avoid race conditions)
 const pendingResults = {};
 
@@ -34,7 +29,7 @@ try {
 
 // Helper to run reel generator Python script
 function triggerReelGeneration(jobId, emotion, context) {
-  console.log(`[server] Spawning ${REEL_PRESET} reel worker for Job ${jobId} (Emotion: ${emotion})...`);
+  console.log(`[server] Spawning reel worker for Job ${jobId} (Emotion: ${emotion})...`);
   jobs[jobId].status = 'processing_reel';
 
   const contextStr = JSON.stringify(context);
@@ -45,8 +40,7 @@ function triggerReelGeneration(jobId, emotion, context) {
     scriptPath,
     '--job-id', jobId,
     '--emotion', emotion,
-    '--context', contextStr,
-    '--preset', REEL_PRESET
+    '--context', contextStr
   ], {
     cwd: __dirname
   });
