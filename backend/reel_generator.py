@@ -119,6 +119,7 @@ PRESETS = {
         "frame_size": (720, 1280),
         "target_fps": 24,
         "video_quality": "middle",
+        "cpu_quota_percent": 60,
         "download_workers": 1,
         "download_chunk_size": 131072,
     },
@@ -170,14 +171,6 @@ def _candidate_worker_counts(hardware: HardwareProfile) -> Tuple[int, ...]:
     return tuple(range(1, max_workers + 1))
 
 
-def _normal_cpu_quota_percent(hardware: HardwareProfile) -> int:
-    """Choose a responsive aggregate CPU budget from available core topology."""
-    # A compositor and encoder can use CPU concurrently. On a four-core machine,
-    # 150% lets that pipeline make progress while still leaving most capacity to
-    # the desktop; smaller machines scale down instead of using the same quota.
-    return min(150, max(100, 50 + 25 * hardware.physical_core_count))
-
-
 def _resolve_preset(preset: str, hardware: HardwareProfile) -> Dict[str, Any]:
     """Resolve a preset into limits appropriate for this machine.
 
@@ -198,7 +191,6 @@ def _resolve_preset(preset: str, hardware: HardwareProfile) -> Dict[str, Any]:
             ffmpeg_threads=1,
             cpu_affinity=(),
             niceness=10,
-            cpu_quota_percent=_normal_cpu_quota_percent(hardware),
         )
         return config
 
@@ -223,11 +215,7 @@ def _run_in_cpu_limited_scope(preset: str) -> Optional[int]:
     idle machine from running one core at 100%. systemd's CPUQuota covers the
     Python renderer and every MovieLite/FFmpeg child process on Linux.
     """
-    quota_percent = (
-        _normal_cpu_quota_percent(_detect_hardware_profile())
-        if preset == "normal"
-        else PRESETS[preset].get("cpu_quota_percent")
-    )
+    quota_percent = PRESETS[preset].get("cpu_quota_percent")
     if (
         not quota_percent
         or sys.platform != "linux"
