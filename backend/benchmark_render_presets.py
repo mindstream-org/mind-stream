@@ -54,7 +54,7 @@ def _run_child(args: argparse.Namespace) -> int:
     os.chdir(Path(__file__).parent)
     from reel_generator import ReelGenerator
 
-    generator = ReelGenerator(preset="  ")
+    generator = ReelGenerator(preset="normal")
     generator._spinner = lambda _: contextlib.nullcontext()
     # Benchmark Linux scheduling without affinity: let the kernel place workers.
     generator.preset_cfg["writer_processes"] = args.workers
