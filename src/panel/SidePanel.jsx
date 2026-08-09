@@ -6,7 +6,6 @@ import ReadyState from "./states/ReadyState.jsx";
 import PlayerState from "./states/PlayerState.jsx";
 import ErrorState from "./states/ErrorState.jsx";
 import OnboardingState from "./states/OnboardingState.jsx";
-import OnboardingComplete from "./states/OnboardingComplete.jsx";
 import { useCycleStatus } from "../hooks/useCycleStatus.js";
 import { useSettings } from "../hooks/useSettings.js";
 import { closeSidePanel, sendMessage } from "../lib/chromeApi.js";
@@ -17,7 +16,6 @@ export default function SidePanel() {
   const { settings, updateSettings, loaded: settingsLoaded } = useSettings();
   const [playing, setPlaying] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
-  const [onboardingStep, setOnboardingStep] = useState(1);
 
   const isPending = cycle.cycle_status === CYCLE_STATUS.PENDING;
 
@@ -77,26 +75,11 @@ export default function SidePanel() {
   // Render onboarding wizard for first-time users
   if (settingsLoaded && !settings.onboarding_complete) {
     return (
-      <PanelShell
-        state={PANEL_STATE.IDLE}
-        headerProps={{ isOnboarding: true, onboardingStep }}
-      >
+      <PanelShell state={PANEL_STATE.IDLE}>
         <OnboardingState
           settings={settings}
           updateSettings={updateSettings}
           onComplete={() => updateSettings({ onboarding_complete: true })}
-          onStepChange={setOnboardingStep}
-        />
-      </PanelShell>
-    );
-  }
-
-  // One-time transition screen after onboarding completes
-  if (settingsLoaded && settings.onboarding_complete && !settings.onboarding_transition_shown) {
-    return (
-      <PanelShell state={PANEL_STATE.IDLE}>
-        <OnboardingComplete
-          onContinue={() => updateSettings({ onboarding_transition_shown: true })}
         />
       </PanelShell>
     );
