@@ -52,43 +52,6 @@ export PEXELS_API_KEY='...'
 python reel_generator.py
 ```
 
-### Render presets
-
-`normal` is the default and is intended for background generation while the
-browser and desktop remain responsive. It renders at 720x1280/24fps with the
-balanced encoder setting. On Linux, it also runs in a 60% CPU cgroup and at a
-lower scheduling priority, so an idle laptop does not keep a core fully busy.
-
-Normal intentionally uses one MovieLite worker. Its 60% CPU quota and lower
-scheduling priority keep it background-friendly, while Linux is free to place
-that work on any available CPU rather than pinning it to CPU 0. On the
-reference laptop, two- and three-worker exports were slower under moderate
-aggregate CPU quotas and increased peak memory substantially because MovieLite
-renders and merges one encoded part per worker.
-
-`fast` starts with up to two workers when current RAM headroom permits it.
-MovieLite renders one encoded part per process and then merges them, so the
-calibration reserves a physical core for the desktop and only accepts
-additional workers when they make a meaningful measured improvement. Linux
-places the selected workers naturally; no preset pins them to particular CPU
-IDs.
-It keeps the same 720x1280/24fps output as Normal but uses MovieLite's faster
-x264 profile and up to two measured-useful encoder threads. That is a modest
-compression trade-off for faster generation, not a resolution or frame-rate
-reduction.
-On its first Fast reel, MindStream benchmarks safe worker counts against a
-short sample of the downloaded footage, caches the fastest meaningful result,
-and reuses it until the hardware or output profile changes.
-
-```bash
-./test.sh --preset normal
-./test.sh --preset fast
-./test.sh --preset fast --recalibrate-presets
-
-# When using the Express server, Normal remains the default.
-MINDSTREAM_REEL_PRESET=fast npm start
-```
-
 **What happens:**
 1. Loads `data/sample_emotion_result.json` (frustrated emotion)
 2. Generates philosophical script with Gemini

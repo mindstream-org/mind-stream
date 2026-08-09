@@ -3,8 +3,6 @@
 #
 # Usage:
 #   ./test.sh                  # Run with default sample (data/sample_emotion_result.json)
-#   ./test.sh --preset fast    # Run the same sample with the Fast preset
-#   ./test.sh --preset fast --recalibrate-presets  # Re-measure Fast worker scaling
 #   ./test.sh --emotion anxious --context '{"active_tab_category":"social_media",...}'
 #
 # How it works:
@@ -30,9 +28,9 @@ fi
 
 source venv/bin/activate
 
-echo "Preparing backend..."
+echo "Checking environment..."
 pip install -q -r requirements.txt 2>/dev/null || pip install -r requirements.txt 2>/dev/null
-echo -e "\033[92m✓\033[0m Ready"
+echo -e "\033[92m✓\033[0m Environment ready"
 
 # # --- API keys (set via env or use defaults) ---
 # if [ -z "$GEMINI_API_KEY" ]; then
@@ -50,7 +48,7 @@ echo -e "\033[92m✓\033[0m Ready"
 # --- Run ---
 if [ $# -gt 0 ]; then
     # Custom args passed — forward to reel_generator.py
-    # echo "Running sample with selected options..."
+    echo "Running with custom args: $@"
     python reel_generator.py "$@"
 else
     # No args — run with default sample data
