@@ -41,6 +41,7 @@ export const DEFAULT_SETTINGS = {
   preset: GENERATION_PRESETS.NORMAL,
   user_name: "Friend",
   onboarding_complete: false,
+  onboarding_transition_shown: false,
 };
 
 export const MESSAGE_TYPES = {

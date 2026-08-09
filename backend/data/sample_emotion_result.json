@@ -1,7 +1,7 @@
 {
   "job_id": "sample-job-001",
   "emotion": {
-    "label": "neutral",
+    "label": "frustrated",
     "confidence": 0.88
   },
   "context": {
@@ -17,7 +17,7 @@
       "recent_switches": 5
     },
     "current_tab_category": "productivity",
-    "user_name": "Prashant",
+    "user_name": "Binary",
     "local_weather": "Cloudy, 20°C",
     "time_of_day": "Evening",
     "session_duration_minutes": 5,

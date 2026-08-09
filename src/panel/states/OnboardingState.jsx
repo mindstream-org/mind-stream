@@ -1,6 +1,8 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Gauge, Zap, RefreshCw } from "lucide-react";
+import { MotionConfig, motion, AnimatePresence } from "motion/react";
 import Button from "../../components/ui/Button.jsx";
+import Logo from "../../components/ui/Logo.jsx";
 import { GENERATION_PRESETS, API_ROUTES } from "../../lib/constants.js";
 
 const TOTAL_STEPS = 4;
@@ -45,8 +47,10 @@ export default function OnboardingState({
   settings,
   updateSettings,
   onComplete,
+  onStepChange,
 }) {
   const [step, setStep] = useState(1);
+  const prevStepRef = useRef(1);
   const [name, setName] = useState(
     settings?.user_name && settings.user_name !== "friend"
       ? settings.user_name
@@ -58,6 +62,24 @@ export default function OnboardingState({
   const [keyStatus, setKeyStatus] = useState(null);
   const [backendReachable, setBackendReachable] = useState(null);
   const [checking, setChecking] = useState(false);
+  const [isInitialMount, setIsInitialMount] = useState(true);
+
+  // Track previous step for conditional animation
+  useEffect(() => {
+    prevStepRef.current = step;
+  }, [step]);
+
+  useEffect(() => {
+    // After first render, disable initial mount flag
+    if (isInitialMount) {
+      setIsInitialMount(false);
+    }
+  }, [isInitialMount]);
+
+  // Notify parent of step changes for header animation
+  useEffect(() => {
+    onStepChange?.(step);
+  }, [step, onStepChange]);
 
   // Check backend health and key status
   const checkBackend = useCallback(() => {
@@ -88,8 +110,12 @@ export default function OnboardingState({
   const missingRequired = keyStatus
     ? REQUIRED_KEYS.filter((k) => keyStatus[k.id] === false)
     : [];
+
+  // Prevent progress indicator flicker by assuming TOTAL_STEPS until we know otherwise
   const needsConfigStep =
-    backendReachable === false || missingRequired.length > 0;
+    backendReachable === null
+      ? true // default to showing config step during initial load
+      : backendReachable === false || missingRequired.length > 0;
   const visibleSteps = needsConfigStep ? TOTAL_STEPS : TOTAL_STEPS - 1;
 
   const goNext = () => setStep((s) => s + 1);
@@ -126,61 +152,94 @@ export default function OnboardingState({
     }
   }, [step, needsConfigStep, backendReachable, finish]);
 
-  return (
-    <div className="flex flex-col h-full  max-w-xs">
-      {/* Step progress bar */}
-      <div className="flex items-center gap-1.5 mb-6 shrink-0">
-        {Array.from({ length: visibleSteps }).map((_, i) => {
-          const stepNum = i + 1;
-          const isActive = stepNum === step;
-          const isCompleted = stepNum < step;
-          return (
-            <div
-              key={i}
-              className={`h-0.5 flex-1 rounded-full transition-all duration-300 ${
-                isActive ? "bg-fg" : isCompleted ? "bg-fg-subtle" : "bg-border"
-              }`}
-            />
-          );
-        })}
-      </div>
+  const isComingFromStep1 = prevStepRef.current === 1 && step === 2;
 
-      <div className="flex-1 overflow-hidden ">
-        {step === 1 && <StepWelcome onNext={goNext} />}
-        {step === 2 && (
-          <StepPersonalise
-            name={name}
-            setName={setName}
-            onNext={saveNameAndNext}
-            onBack={goBack}
-          />
-        )}
-        {step === 3 && (
-          <StepPreferences
-            preset={preset}
-            setPreset={setPreset}
-            onNext={savePresetAndNext}
-            onBack={goBack}
-            skipBackend={!needsConfigStep}
-          />
-        )}
-        {step === 4 && needsConfigStep && (
-          <StepBackend
-            backendReachable={backendReachable}
-            keyStatus={keyStatus}
-            missingRequired={missingRequired}
-            checking={checking}
-            onRecheck={checkBackend}
-            onFinish={finish}
-            onBack={goBack}
-          />
-        )}
+  return (
+    <MotionConfig transition={{ duration: 0.75, ease: [0.25, 0.1, 0.25, 1] }}>
+      <div className="flex flex-col h-full max-w-xs">
+        {/* Step progress bar */}
+        <div className="flex items-center gap-1.5 mb-6 shrink-0">
+          {Array.from({ length: visibleSteps }).map((_, i) => {
+            const stepNum = i + 1;
+            const isActive = stepNum === step;
+            const isCompleted = stepNum < step;
+            return (
+              <div
+                key={i}
+                className={`h-0.5 flex-1 rounded-full transition-all duration-300 ${
+                  isActive
+                    ? "bg-fg"
+                    : isCompleted
+                      ? "bg-fg-subtle"
+                      : "bg-border"
+                }`}
+              />
+            );
+          })}
+        </div>
+
+        <AnimatePresence mode="wait">
+          <div key={step} className="flex-1 relative overflow-hidden">
+            {step === 1 ? (
+              <StepWelcome onNext={goNext} showLogo={true} />
+            ) : step === 2 ? (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{
+                  delay: isComingFromStep1 ? 0.6 : 0,
+                  duration: 0.3,
+                }}
+                className="h-full"
+              >
+                <StepPersonalise
+                  name={name}
+                  setName={setName}
+                  onNext={saveNameAndNext}
+                  onBack={goBack}
+                />
+              </motion.div>
+            ) : step === 3 ? (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ duration: 0.3 }}
+                className="h-full"
+              >
+                <StepPreferences
+                  preset={preset}
+                  setPreset={setPreset}
+                  onNext={savePresetAndNext}
+                  onBack={goBack}
+                  skipBackend={!needsConfigStep}
+                />
+              </motion.div>
+            ) : step === 4 && needsConfigStep ? (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ duration: 0.3 }}
+                className="h-full"
+              >
+                <StepBackend
+                  backendReachable={backendReachable}
+                  keyStatus={keyStatus}
+                  missingRequired={missingRequired}
+                  checking={checking}
+                  onRecheck={checkBackend}
+                  onFinish={finish}
+                  onBack={goBack}
+                />
+              </motion.div>
+            ) : null}
+          </div>
+        </AnimatePresence>
       </div>
-    </div>
+    </MotionConfig>
   );
 }
 
-function StepWelcome({ onNext }) {
+function StepWelcome({ onNext, showLogo = true }) {
   return (
     <div className="flex h-full flex-col animate-fadein">
       <div className="flex-1 flex flex-col justify-center">
@@ -194,12 +253,7 @@ function StepWelcome({ onNext }) {
         */}
 
         <div className="flex justify-center mb-8">
-          <img
-            src="/assets/logo.png"
-            alt="MindStream"
-            className="w-28 select-none"
-            draggable={false}
-          />
+          {showLogo && <Logo size="medium" />}
         </div>
 
         <div className="space-y-3">
