@@ -2,14 +2,10 @@ import { CAPTURE_FOLDER } from "./constants.js";
 import { isExtensionContext } from "./chromeApi.js";
 
 /** Builds the extension → backend payload per the project summary's contract. */
-export function buildCheckInPayload({ tabInfo, settings } = {}) {
-  const preset = settings?.preset ?? "normal";
-  const userName = settings?.user_name ?? tabInfo?.userName ?? "friend";
-
+export function buildCheckInPayload({ tabInfo } = {}) {
   return {
     session_id: crypto.randomUUID(),
     captured_at: new Date().toISOString(),
-    preset,
     emotion: {
       source: "server", // client-side inference is still an open question (§8)
       confidence: null,
@@ -18,7 +14,7 @@ export function buildCheckInPayload({ tabInfo, settings } = {}) {
       active_tab_category: tabInfo?.category ?? "unknown",
       active_tab_domain: tabInfo?.domain ?? "unknown",
       active_tab_title: tabInfo?.title ?? "unknown",
-      user_name: userName,
+      user_name: tabInfo?.userName ?? "friend",
       local_weather: tabInfo?.weather ?? "calm",
       time_of_day: new Date().getHours() < 12 ? "morning" : new Date().getHours() < 18 ? "afternoon" : "evening",
       session_duration_minutes: tabInfo?.sessionDurationMinutes ?? 0,

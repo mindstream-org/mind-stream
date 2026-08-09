@@ -29,18 +29,6 @@ export const CYCLE_STATUS = {
 
 export const STORAGE_KEYS = {
   CYCLE: "mindstream_cycle",
-  SETTINGS: "mindstream_settings",
-};
-
-export const GENERATION_PRESETS = {
-  NORMAL: "normal",
-  FAST: "fast",
-};
-
-export const DEFAULT_SETTINGS = {
-  preset: GENERATION_PRESETS.NORMAL,
-  user_name: "Friend",
-  onboarding_complete: false,
 };
 
 export const MESSAGE_TYPES = {
@@ -91,8 +79,6 @@ export const API_BASE = "http://localhost:4000";
 export const API_ROUTES = {
   CHECK_IN: `${API_BASE}/check-in`,
   JOB_STATUS: (jobId) => `${API_BASE}/jobs/${jobId}`,
-  CANCEL_JOB: (jobId) => `${API_BASE}/jobs/${jobId}/cancel`,
-  HEALTH: `${API_BASE}/health`,
 };
 
 // --- Capture handoff -----------------------------------------------------
