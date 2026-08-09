@@ -173,6 +173,53 @@ function triggerReelGeneration(jobId, emotion, context, preset) {
   });
 }
 
+/**
+ * Spawns predict_emotion.py for the given clip path.
+ * The script writes a _result.json file which the chokidar watcher picks up
+ * and calls triggerReelGeneration automatically.
+ */
+function spawnEmotionDetection(jobId, clipPath) {
+  const job = jobs[jobId];
+  if (!job || job.status === 'cancelled') return;
+
+  const pythonPath = path.join(__dirname, 'venv', 'bin', 'python');
+  const scriptPath = path.join(__dirname, 'predict_emotion.py');
+
+  // Resolve clip path: if relative, resolve from Downloads/mindstream_captures
+  let absoluteClipPath = clipPath;
+  if (!path.isAbsolute(clipPath)) {
+    absoluteClipPath = path.join(CAPTURE_FOLDER, path.basename(clipPath));
+  }
+
+  console.log(`[server] Spawning emotion detection for Job ${jobId}: ${path.basename(absoluteClipPath)}`);
+
+  const worker = spawn(pythonPath, [scriptPath, '--clip', absoluteClipPath], {
+    cwd: __dirname,
+    env: { ...process.env, PYTHONUNBUFFERED: '1' }
+  });
+
+  job.process = worker;
+
+  worker.stdout.on('data', (data) => {
+    process.stdout.write(data);
+  });
+
+  worker.stderr.on('data', (data) => {
+    process.stderr.write(data);
+  });
+
+  worker.on('close', (code) => {
+    job.process = null;
+    if (job.status === 'cancelled') return;
+
+    if (code !== 0) {
+      console.error(`[server] Emotion detection failed for Job ${jobId} (exit ${code})`);
+      // chokidar will still pick up the error JSON written by predict_emotion.py
+      // and mark the job as failed via the watcher handler below.
+    }
+  });
+}
+
 // POST /check-in
 app.post('/check-in', (req, res) => {
   const { session_id, context, clip_path, preset } = req.body;
@@ -199,6 +246,7 @@ app.post('/check-in', (req, res) => {
   };
 
   // Check if we already received the emotion detection result for this clip file
+  // (race condition guard: result JSON arrived before check-in POST)
   if (clip_path) {
     const baseName = path.basename(clip_path, '.webm');
     if (pendingResults[baseName]) {
@@ -208,29 +256,21 @@ app.post('/check-in', (req, res) => {
 
       if (result.emotion && result.emotion.label) {
         triggerReelGeneration(session_id, result.emotion.label, context, selectedPreset);
-        res.json({ job_id: session_id });
-        return;
       } else {
         jobs[session_id].status = 'failed';
         jobs[session_id].error = result.error || 'Emotion detection failed';
-        res.json({ job_id: session_id });
-        return;
       }
+      res.json({ job_id: session_id });
+      return;
     }
-  }
 
-  // Development Fallback: If no real Phase 2 (friend's script) writes a _result.json
-  // within 2 seconds, auto-generate a fallback emotion so testing works end-to-end.
-  if (process.env.MINDSTREAM_MOCK_EMOTION !== 'false') {
-    setTimeout(() => {
-      const job = jobs[session_id];
-      if (job && job.status === 'processing_emotion') {
-        const mockEmotions = ['neutral', 'anxious', 'fatigued', 'distracted', 'frustrated'];
-        const fallbackEmotion = mockEmotions[Math.floor(Math.random() * mockEmotions.length)];
-        console.log(`[server] [Phase 2 Simulation] No Phase 2 result JSON detected yet. Auto-generating mock emotion '${fallbackEmotion}' for Job ${session_id}...`);
-        triggerReelGeneration(session_id, fallbackEmotion, context, selectedPreset);
-      }
-    }, 2000);
+    // Spawn Phase 2 inference — predict_emotion.py writes _result.json
+    // which the chokidar watcher below picks up and calls triggerReelGeneration.
+    spawnEmotionDetection(session_id, clip_path);
+  } else {
+    console.warn(`[server] check-in received without clip_path for Job ${session_id} — cannot run emotion detection`);
+    jobs[session_id].status = 'failed';
+    jobs[session_id].error = 'No clip path provided';
   }
 
   res.json({ job_id: session_id });

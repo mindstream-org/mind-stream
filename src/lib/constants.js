@@ -102,13 +102,15 @@ export const API_ROUTES = {
 export const CAPTURE_FOLDER = "mindstream_captures";
 
 // --- Emotion categories ---------------------------------------------------
-// Keep this small and high-confidence per the open question in the project
-// summary — this list is the contract between the inference step and the
-// asset library (background clip + audio pairs keyed by these labels).
+// These are the 8 FER+ class labels output directly by the Phase 2 model.
+// They are passed as-is to Phase 3 (reel_generator.py) and to Gemini.
 export const EMOTION_CATEGORIES = [
-  "frustrated",
-  "fatigued",
-  "distracted",
-  "anxious",
+  "angry",
+  "contempt",
+  "disgust",
+  "fear",
+  "happy",
   "neutral",
+  "sad",
+  "surprise",
 ];

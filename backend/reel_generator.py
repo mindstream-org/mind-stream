@@ -1,6 +1,6 @@
 """
 MindStream Reel Generator (MovieLite Edition - 4x faster)
-Pipeline: Script (Gemini JSON) → Videos (Pexels/Pixabay/Coverr) → TTS (MiMo Dean) → Subtitles (Manual) → Composite (MovieLite)
+Pipeline: Script (Llama 3.3 70B via Groq / Gemini fallback) → Videos (Pexels/Pixabay/Coverr) → TTS (MiMo Dean) → Subtitles (Manual) → Composite (MovieLite)
 """
 
 # Suppress tqdm progress bars from MovieLite (must be before imports)
@@ -324,13 +324,18 @@ class ReelGenerator:
             self.output_dir, "render_profile_calibration.json"
         )
 
-        # Ambient audio mapping (placeholder files - replace with real audio later)
+        # Ambient audio mapping — one file per FER+ emotion class.
+        # See assets/audio/README.md for generation prompts.
+        # Falls back to neutral.mp3 if a file is missing.
         self.ambient_music = {
-            "frustrated": "assets/audio/frustrated.mp3",  # Dark ambient, subtle rain
-            "fatigued": "assets/audio/fatigued.mp3",  # Soft piano, gentle pads
-            "distracted": "assets/audio/distracted.mp3",  # Calm waves, subtle wind
-            "anxious": "assets/audio/anxious.mp3",  # Breathing sounds, soft hum
-            "neutral": "assets/audio/neutral.mp3",  # White noise, minimal drone
+            "angry":    "assets/audio/angry.mp3",     # Low rumble, rain on glass
+            "contempt": "assets/audio/contempt.mp3",  # Sparse piano, warm pad hum
+            "disgust":  "assets/audio/disgust.mp3",   # Gentle stream, forest ambience
+            "fear":     "assets/audio/fear.mp3",      # Slow breathing, soft drone
+            "happy":    "assets/audio/happy.mp3",     # Warm resonance, morning birds
+            "neutral":  "assets/audio/neutral.mp3",   # White noise, minimal drone
+            "sad":      "assets/audio/sad.mp3",       # Sparse piano, slow ocean waves
+            "surprise": "assets/audio/surprise.mp3",  # Calm waves, grounding bell
         }
 
     @contextlib.contextmanager
@@ -371,17 +376,18 @@ class ReelGenerator:
         """
         activity = context.get("active_tab_category", "browsing")
         time_of_day = context.get("time_of_day", "the day")
-        duration = context.get("session_duration_minutes", 0)
-        idle_time = context.get("idle_minutes_since_last_activity", 0)
         user_name = context.get("user_name", "friend")
-        local_weather = context.get("local_weather", "calm")
 
-        # Build activity description more generically
-        activity_desc = activity
-        if duration > 60:
-            activity_desc += f" for a while"
-        elif duration > 30:
-            activity_desc += f" for some time"
+        # Map activity categories to richer, more evocative language for the prompt
+        activity_descriptions = {
+            "coding":        "writing code — deep in logic, problem-solving, debugging",
+            "entertainment": "watching videos or streams — passively consuming content",
+            "social_media":  "scrolling through social media — flicking between posts and feeds",
+            "research":      "reading and researching — absorbing information",
+            "shopping":      "browsing products — weighing options, comparing things",
+            "browsing":      "browsing the web — moving from tab to tab",
+        }
+        activity_desc = activity_descriptions.get(activity, f"working on their computer ({activity})")
 
         prompt = f"""You are a wise, warm elder — like a grandfather — speaking directly to {user_name} who is currently feeling {emotion}.
 
@@ -392,21 +398,19 @@ Speak with real intimacy, as if you know this person and genuinely care.
 
 Context you must weave in naturally:
 - Their name: {user_name}
-- What they've been doing: {activity_desc} on their computer
-- How long: about {duration} minutes
+- What they've been doing: {activity_desc}
 - Time of day: {time_of_day}
-- Weather outside right now: {local_weather}
 - Their emotional state: {emotion}
 
 Writing guidelines (follow all of them):
-1. Open by gently saying their name and acknowledging the pattern of their attention — not a specific tab or website, but the quality of how they've been engaging (pulled in, distracted, focused, etc.)
-2. Use one vivid nature metaphor (river, cloud, tree, candle, tide, light) that mirrors their emotional state
-3. Acknowledge the universal human quality of getting caught in digital loops — validate it without shame
+1. Open by gently saying their name and acknowledging the quality of their attention in this moment — not what they were doing, but HOW they were doing it (pulled in, scattered, absorbed, restless, flowing)
+2. Use one vivid nature metaphor (river, cloud, tree, candle, tide, light) that mirrors their emotional state: {emotion}
+3. Acknowledge the universal human quality of getting absorbed in screens — validate it without shame
 4. Give ONE simple physical anchor they can do right now (e.g. "feel the weight of your feet on the floor", "place a palm on your chest", "let your eyes rest on something distant")
 5. End with a gentle permission — to rest, to be imperfect, to simply exist for a moment
 
 DO NOT:
-- Mention specific websites, domains, or tab titles
+- Mention specific websites, domains, or app names
 - Be prescriptive about what they "should" do
 - Use coaching or corporate language
 - List multiple steps or actions
@@ -481,19 +485,22 @@ Do not truncate, summarise, or skip any part of the script."""
     # Step 2 — Video keyword extraction
     # -----------------------------------------------------------------------
 
-    def extract_video_keywords(self, script: str, emotion: str) -> List[str]:
-        """Extract 3-5 cinematic/moody video search terms from the script."""
+    def extract_video_keywords(self, script: str, emotion: str, context: Dict[str, Any] = None) -> List[str]:
+        """Extract 8-10 cinematic/moody video search terms from the script and context."""
+        activity = (context or {}).get("active_tab_category", "")
+        activity_hint = f"\n- User's current activity: {activity}" if activity else ""
 
-        prompt = f"""From this mindfulness script about the emotion "{emotion}", extract 3-5 search terms to find matching stock video footage.
+        prompt = f"""From this mindfulness script about the emotion "{emotion}", extract 8-10 search terms to find matching stock video footage.
 
 Script:
-{script}
+{script}{activity_hint}
 
 The video aesthetic must feel: deep, cinematic, moody, trustworthy, grounding — NOT bright, cheerful, or stock-photo generic.
 Use low-light, dusk, mist, shadows, slow motion, nature, water, fire, sky, or architectural calm as visual themes.
+Vary the terms so each clip looks visually distinct from the others.
 
-Return ONLY a JSON array of 3-5 strings, e.g.:
-["misty forest at dusk", "soft rain on a window", "dark ocean waves at night", "candle flame slow motion"]
+Return ONLY a JSON array of 8-10 strings, e.g.:
+["misty forest at dusk", "soft rain on a window", "dark ocean waves at night", "candle flame slow motion", "fog rolling over mountains", "empty street at night rain", "close up water drops glass", "lone tree misty field"]
 
 No explanation, no markdown — just the raw JSON array."""
 
@@ -525,7 +532,7 @@ No explanation, no markdown — just the raw JSON array."""
             text = text.replace("```json", "").replace("```", "").strip()
             keywords = json.loads(text)
             if isinstance(keywords, list) and keywords:
-                return keywords[:5]
+                return keywords[:10]
         except Exception as e:
             print(f"Keyword extraction failed ({e})")
             return []
@@ -1220,20 +1227,41 @@ No explanation, no markdown — just the raw JSON array."""
             )
 
             # --- Phase 1: Process video clips ---
-            time_per_clip = duration / len(video_paths)
+            # Cap each clip at MAX_CLIP_SECONDS so the reel cuts every few seconds
+            # rather than looping the same scene for the entire TTS duration.
+            MAX_CLIP_SECONDS = 5.0
+            n_clips = len(video_paths)
+            # Distribute total duration evenly but never exceed the cap.
+            # If we have more clips than needed, only use as many as required
+            # to cover the full audio at the cap duration.
+            clips_needed = max(1, -(-int(duration) // int(MAX_CLIP_SECONDS)))  # ceil div
+            clips_to_use = video_paths[:clips_needed] if len(video_paths) >= clips_needed else video_paths
+            n_used = len(clips_to_use)
+            time_per_clip = duration / n_used
+            # If even distribution is above cap, loop back through available clips
+            if time_per_clip > MAX_CLIP_SECONDS:
+                time_per_clip = MAX_CLIP_SECONDS
+
             processed_clips = []
             current_time = 0.0
+            clip_idx = 0
 
-            for i, path in enumerate(video_paths):
+            while current_time < duration - 0.05:
+                path = clips_to_use[clip_idx % n_used]
+                clip_dur = min(time_per_clip, duration - current_time)
                 clip = ml.VideoClip(path)
                 clip = self._resize_to_portrait(clip, (frame_width, frame_height))
 
-                if clip.duration < time_per_clip:
+                if clip.duration < clip_dur:
                     clip.loop(True)
 
-                clip.set_duration(time_per_clip)
+                clip.set_duration(clip_dur)
                 clip.set_start(current_time)
-                current_time += time_per_clip
+                # Mute the video's own audio track — all audio comes from TTS + ambient
+                if clip.audio.has_audio:
+                    clip.audio.set_volume(0)
+                current_time += clip_dur
+                clip_idx += 1
                 processed_clips.append(clip)
 
             print(f"{self.GREEN}✓{self.RESET} Processing video clips")
@@ -1246,7 +1274,7 @@ No explanation, no markdown — just the raw JSON array."""
 
             audio_clips = [tts_audio]
             if ambient_path and os.path.exists(ambient_path):
-                ambient_audio = ml.AudioClip(ambient_path, start=0, volume=0.12)
+                ambient_audio = ml.AudioClip(ambient_path, start=0, volume=0.35)
                 ambient_audio.set_duration(duration)
                 ambient_audio.loop(True)
                 audio_clips.append(ambient_audio)
@@ -1379,7 +1407,7 @@ No explanation, no markdown — just the raw JSON array."""
             print(f"Provider : Pexels")
 
             with self._spinner("Searching videos..."):
-                keywords = self.extract_video_keywords(script, emotion)
+                keywords = self.extract_video_keywords(script, emotion, context)
                 result["keywords"] = keywords
                 if not keywords:
                     raise RuntimeError("Could not extract video keywords from script")

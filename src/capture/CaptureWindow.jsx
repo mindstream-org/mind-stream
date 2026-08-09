@@ -12,13 +12,10 @@ import { sendMessage } from "../lib/chromeApi.js";
 import { MESSAGE_TYPES, PANEL_STATE } from "../lib/constants.js";
 
 /**
- * This is a normal extension popup window, not a side panel — getUserMedia's
- * permission prompt only renders reliably here (see MINDSTREAM_PROJECT_SUMMARY.md
- * for why capture had to move out of the side panel entirely).
+ * Popup window that owns the webcam capture flow.
+ * getUserMedia only works reliably in a popup, not the side panel.
  *
- * Flow: skeleton (permission pending) -> capture (3s recording, stream stays
- * open) -> confirm ("Let's go!" / "Not now" — nothing submitted yet) ->
- * countdown (only after confirming) -> window closes itself.
+ * Flow: skeleton → capture (3s) → confirm → countdown → close
  */
 export default function CaptureWindow() {
   const camera = useCameraCapture();
@@ -26,9 +23,6 @@ export default function CaptureWindow() {
   const startedRef = useRef(false);
   const [confirmed, setConfirmed] = useState(false);
   const [countdownProgress, setCountdownProgress] = useState(null);
-  // Stores the save promise so handleCountdownComplete can wait for it
-  // before tearing the window down — avoids a race where the countdown
-  // finishes before the clip is fully written to disk.
   const savePromiseRef = useRef(null);
 
   // Single trigger point — no side panel to race against here.
@@ -40,9 +34,7 @@ export default function CaptureWindow() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Safety net: if this window gets force-closed (red ✕) mid-flow, make
-  // sure the camera stream actually stops rather than lingering — that's
-  // what leaves the OS-level "camera in use" indicator stuck on.
+  // Safety net: stop the camera stream if this window is force-closed.
   useEffect(() => {
     const cleanup = () => camera.stopStream();
     window.addEventListener("pagehide", cleanup);
@@ -60,10 +52,7 @@ export default function CaptureWindow() {
 
   const handleAccept = async () => {
     setConfirmed(true);
-    camera.stopStream(); // ensure camera is released before we save
-
-    // Save the clip to disk and notify background — the promise is stored
-    // so handleCountdownComplete can await it before closing the window.
+    camera.stopStream();
     savePromiseRef.current = (async () => {
       const clipPath = await saveCapture(camera.blob);
       if (clipPath) {
@@ -73,19 +62,14 @@ export default function CaptureWindow() {
   };
 
   const handleDecline = async () => {
-    camera.stopStream(); // release the camera before closing
+    camera.stopStream();
     await sendMessage({ type: MESSAGE_TYPES.CANCEL_CHECKIN });
     window.close();
   };
 
   const handleCountdownComplete = async () => {
-    camera.stopStream(); // safety net — release camera before closing
-    // Wait for the save to finish before tearing the window down.
-    // Saving a 3s webm is fast (< 100ms typically), but this guards
-    // against the countdown winning a race with a slow disk.
-    if (savePromiseRef.current) {
-      await savePromiseRef.current;
-    }
+    camera.stopStream();
+    if (savePromiseRef.current) await savePromiseRef.current;
     window.close();
   };
 
@@ -107,13 +91,13 @@ export default function CaptureWindow() {
       )}
       {panelState === PANEL_STATE.ERROR && (
         <div className="flex flex-col animate-fadein">
-          <div className="w-11 h-11 rounded-full bg-coral-soft border border-coral text-coral flex items-center justify-center font-mono font-bold mb-4.5">
+          <div className="w-11 h-11 rounded-full bg-surface-raised border border-border text-fg-subtle flex items-center justify-center font-mono font-bold mb-4">
             !
           </div>
-          <h1 className="text-[22px] font-bold leading-tight mb-2.5 tracking-[-0.01em]">
+          <h1 className="text-[22px] font-bold leading-tight mb-2 tracking-[-0.01em]">
             Couldn't get camera access.
           </h1>
-          <p className="text-[13.5px] leading-relaxed text-fog mb-5">
+          <p className="text-[13px] leading-relaxed text-fg-muted mb-5">
             Check the extension's site permissions, then try the check-in again from the side panel.
           </p>
           <Button variant="primary" onClick={() => window.close()}>
