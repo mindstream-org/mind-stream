@@ -1355,8 +1355,7 @@ No explanation, no markdown — just the raw JSON array."""
         try:
             # Phase 1: Script generation
             self._print_step(1, 5, "Generating personalized script")
-            provider_name = "Groq" if self.script_provider == "groq" else "Gemini"
-            print(f"Provider : {provider_name} ({self.script_model})")
+            print(f"Provider : Gemini ({self.script_model})")
 
             with self._spinner("Generating script..."):
                 script_data = self.generate_script(emotion, context)
