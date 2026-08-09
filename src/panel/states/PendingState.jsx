@@ -1,94 +1,97 @@
+import Button from "../../components/ui/Button.jsx";
+
 /**
- * PendingState — shown while the check-in cycle is in progress.
+ * Shown in the side panel when cycle_status is "pending". Three sub-states:
  *
- * Three sub-states, single unified layout:
- *   1. Capture window open (no clip yet)
- *   2. Clip saved, emotion detection running
- *   3. Job submitted, reel generation running
+ * 1. Capture window is still open → brief "look for the window" hint.
+ * 2. Clip saved, emotion detection running (friend's workflow) → show
+ *    animated progress and a cancel/redo button.
+ * 3. Job submitted, reel generation running → show animated progress and
+ *    a cancel/redo button. (Future — once backend exists.)
  */
 export default function PendingState({ hasJobId, hasClipSaved, onCancel }) {
-  const label = hasJobId ? "Generating" : hasClipSaved ? "Analysing" : "Capturing";
-  const activeStep = hasJobId ? 2 : hasClipSaved ? 1 : 0;
-
-  const steps = [
-    "Snapshot captured",
-    "Emotion detected",
-    "Assembling reel",
-  ];
-
-  return (
-    <div className="flex flex-col h-full animate-fadein">
-      <p className="font-mono text-[10px] uppercase tracking-widest text-fg-subtle mb-8">
-        {label}
-      </p>
-
-      {/* TODO(prash): Processing animation
-          Asset: Lottie, ~80×80px, white line art on transparent bg
-          Show during generation sub-state (hasJobId) */}
-
-      <div className="flex flex-col gap-4">
-        {steps.map((step, i) => (
-          <Step
-            key={step}
-            label={step}
-            done={i < activeStep}
-            active={i === activeStep}
-          />
-        ))}
-      </div>
-
-      {(hasJobId || hasClipSaved) && (
-        <div className="mt-auto">
-          <button
-            onClick={onCancel}
-            className="text-[12.5px] text-fg-subtle hover:text-fg-muted transition-colors cursor-pointer"
-          >
-            Cancel &amp; redo
-          </button>
+  if (hasJobId) {
+    // Generation is in progress — the capture window has already closed.
+    return (
+      <div className="flex flex-col h-full animate-fadein">
+        <div className="font-mono text-[11px] tracking-[0.12em] uppercase text-amber mb-2.5">
+          Generating
         </div>
-      )}
-    </div>
-  );
-}
+        <h1 className="text-[22px] font-bold leading-tight mb-2.5 tracking-[-0.01em]">
+          Your reel is being put together.
+        </h1>
+        <p className="text-[13.5px] leading-relaxed text-fog mb-6">
+          We'll notify you the moment it's ready. Go ahead and get back to
+          what you were doing — no need to keep this open.
+        </p>
 
-function Step({ label, done, active }) {
-  return (
-    <div className="flex items-center gap-3.5">
-      <div
-        className={`w-4 h-4 rounded-full border flex items-center justify-center shrink-0 transition-all duration-200 ${
-          done
-            ? "border-fg-subtle bg-fg-subtle"
-            : active
-            ? "border-fg-muted"
-            : "border-border"
-        }`}
-      >
-        {done && (
-          <svg width="7" height="6" viewBox="0 0 7 6" fill="none">
-            <path
-              d="M1 3l1.8 2L6 1"
-              stroke="#09090b"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        )}
-        {active && (
-          <span className="w-1.5 h-1.5 rounded-full bg-fg-muted animate-pulse block" />
-        )}
+        {/* Animated generating indicator */}
+        <div className="flex items-center gap-3 px-4 py-3.5 rounded-xl bg-panel-raised border border-hairline mb-6">
+          <div className="flex gap-1">
+            <div className="w-1.5 h-1.5 rounded-full bg-amber animate-bounce" style={{ animationDelay: "0ms" }} />
+            <div className="w-1.5 h-1.5 rounded-full bg-amber animate-bounce" style={{ animationDelay: "150ms" }} />
+            <div className="w-1.5 h-1.5 rounded-full bg-amber animate-bounce" style={{ animationDelay: "300ms" }} />
+          </div>
+          <span className="text-[13px] text-fog">Processing your check-in…</span>
+        </div>
+
+        <div className="mt-auto">
+          <Button variant="ghost" className="w-full" onClick={onCancel}>
+            Cancel &amp; redo
+          </Button>
+        </div>
       </div>
-      <span
-        className={`text-[13px] leading-none transition-colors ${
-          done
-            ? "text-fg-subtle line-through"
-            : active
-            ? "text-fg"
-            : "text-fg-subtle"
-        }`}
-      >
-        {label}
-      </span>
+    );
+  }
+
+  if (hasClipSaved) {
+    // Clip saved to disk — emotion detection (friend's workflow) picks it up.
+    return (
+      <div className="flex flex-col h-full animate-fadein">
+        <div className="font-mono text-[11px] tracking-[0.12em] uppercase text-teal mb-2.5">
+          Processing
+        </div>
+        <h1 className="text-[22px] font-bold leading-tight mb-2.5 tracking-[-0.01em]">
+          Your clip has been saved.
+        </h1>
+        <p className="text-[13.5px] leading-relaxed text-fog mb-6">
+          Emotion detection is running on your snapshot. Once it finishes,
+          we'll start assembling your reel. You can close this panel —
+          we'll notify you when it's ready.
+        </p>
+
+        {/* Animated processing indicator */}
+        <div className="flex items-center gap-3 px-4 py-3.5 rounded-xl bg-panel-raised border border-hairline mb-6">
+          <div className="flex gap-1">
+            <div className="w-1.5 h-1.5 rounded-full bg-teal animate-bounce" style={{ animationDelay: "0ms" }} />
+            <div className="w-1.5 h-1.5 rounded-full bg-teal animate-bounce" style={{ animationDelay: "150ms" }} />
+            <div className="w-1.5 h-1.5 rounded-full bg-teal animate-bounce" style={{ animationDelay: "300ms" }} />
+          </div>
+          <span className="text-[13px] text-fog">Analyzing your check-in…</span>
+        </div>
+
+        <div className="mt-auto">
+          <Button variant="ghost" className="w-full" onClick={onCancel}>
+            Cancel &amp; redo
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  // Capture window is still open — just a brief hint.
+  return (
+    <div className="flex flex-col animate-fadein">
+      <div className="font-mono text-[11px] tracking-[0.12em] uppercase text-fog-dim mb-2.5">
+        Check-in in progress
+      </div>
+      <h1 className="text-[22px] font-bold leading-tight mb-2.5 tracking-[-0.01em]">
+        Look for the check-in window.
+      </h1>
+      <p className="text-[13.5px] leading-relaxed text-fog">
+        A small window opened for your snap — allow camera access there. This panel will switch over
+        automatically once your reel is ready.
+      </p>
     </div>
   );
 }

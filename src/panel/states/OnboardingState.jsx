@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from "react";
-import { Gauge, Zap, RefreshCw } from "lucide-react";
+import { useState, useEffect } from "react";
+import { Gauge, Zap } from "lucide-react";
 import Button from "../../components/ui/Button.jsx";
 import { GENERATION_PRESETS, API_ROUTES } from "../../lib/constants.js";
 
@@ -57,33 +57,25 @@ export default function OnboardingState({
   );
   const [keyStatus, setKeyStatus] = useState(null);
   const [backendReachable, setBackendReachable] = useState(null);
-  const [checking, setChecking] = useState(false);
 
-  // Check backend health and key status
-  const checkBackend = useCallback(() => {
-    setChecking(true);
-    const startedAt = Date.now();
-
-    return fetch(API_ROUTES.HEALTH, { signal: AbortSignal.timeout(3000) })
+  useEffect(() => {
+    let cancelled = false;
+    fetch(API_ROUTES.HEALTH, { signal: AbortSignal.timeout(3000) })
       .then((r) => r.json())
       .then((data) => {
+        if (cancelled) return;
         setKeyStatus(data.keys ?? {});
         setBackendReachable(true);
       })
       .catch(() => {
+        if (cancelled) return;
         setKeyStatus({});
         setBackendReachable(false);
-      })
-      .finally(() => {
-        const elapsed = Date.now() - startedAt;
-        const remaining = Math.max(0, 500 - elapsed);
-        setTimeout(() => setChecking(false), remaining);
       });
+    return () => {
+      cancelled = true;
+    };
   }, []);
-
-  useEffect(() => {
-    checkBackend();
-  }, [checkBackend]);
 
   const missingRequired = keyStatus
     ? REQUIRED_KEYS.filter((k) => keyStatus[k.id] === false)
@@ -109,43 +101,30 @@ export default function OnboardingState({
     }
   };
 
-  const finish = useCallback(() => {
+  const finish = () => {
     updateSettings({
       user_name: name.trim() || "friend",
       preset,
       onboarding_complete: true,
     });
     onComplete?.();
-  }, [name, preset, updateSettings, onComplete]);
-
-  // Auto-complete onboarding if user is on step 4 but no longer needs config
-  // This handles the case where backend comes online or keys are added mid-step-4
-  useEffect(() => {
-    if (step === 4 && !needsConfigStep && backendReachable !== null) {
-      finish();
-    }
-  }, [step, needsConfigStep, backendReachable, finish]);
+  };
 
   return (
-    <div className="flex flex-col h-full  max-w-xs">
-      {/* Step progress bar */}
-      <div className="flex items-center gap-1.5 mb-6 shrink-0">
-        {Array.from({ length: visibleSteps }).map((_, i) => {
-          const stepNum = i + 1;
-          const isActive = stepNum === step;
-          const isCompleted = stepNum < step;
-          return (
-            <div
-              key={i}
-              className={`h-0.5 flex-1 rounded-full transition-all duration-300 ${
-                isActive ? "bg-fg" : isCompleted ? "bg-fg-subtle" : "bg-border"
-              }`}
-            />
-          );
-        })}
+    <div className="flex flex-col h-full">
+      {/* Step progress */}
+      <div className="flex items-center gap-1 mb-6 shrink-0">
+        {Array.from({ length: visibleSteps }).map((_, i) => (
+          <div
+            key={i}
+            className={`h-[2px] flex-1 rounded-full transition-all duration-400 ${
+              i < step ? "bg-fg-muted" : "bg-border"
+            }`}
+          />
+        ))}
       </div>
 
-      <div className="flex-1 overflow-hidden ">
+      <div className="flex-1 overflow-hidden">
         {step === 1 && <StepWelcome onNext={goNext} />}
         {step === 2 && (
           <StepPersonalise
@@ -169,8 +148,6 @@ export default function OnboardingState({
             backendReachable={backendReachable}
             keyStatus={keyStatus}
             missingRequired={missingRequired}
-            checking={checking}
-            onRecheck={checkBackend}
             onFinish={finish}
             onBack={goBack}
           />
@@ -225,7 +202,9 @@ function StepWelcome({ onNext }) {
               key={item}
               className="flex items-center gap-3 text-sm text-fg-muted"
             >
+              {/* Replace with Lucide icon later */}
               <div className="h-1.5 w-1.5 rounded-full bg-primary shrink-0" />
+
               <span>{item}</span>
             </div>
           ))}
@@ -240,37 +219,31 @@ function StepWelcome({ onNext }) {
 }
 
 function StepPersonalise({ name, setName, onNext, onBack }) {
-  const hasName = name.trim().length > 0;
-
   return (
     <div className="flex flex-col h-full animate-fadein">
       <h1 className="text-[20px] font-semibold leading-snug tracking-[-0.025em] mb-1.5">
         What should we call you?
       </h1>
-      <p className="text-[13px] text-fg-muted leading-relaxed mb-5">
+      <p className="text-[13px] text-fg-muted leading-relaxed mb-6">
         Used in your reel narration. Entirely optional.
       </p>
 
       <input
         type="text"
-        value={name}
+        // value={name}
         onChange={(e) => setName(e.target.value)}
         onKeyDown={(e) => e.key === "Enter" && onNext()}
         placeholder="e.g. Alex"
         autoFocus
-        className="w-full bg-surface-raised border border-border rounded-[8px] px-4 py-2.5 text-[13px] text-fg placeholder:text-fg-subtle focus:outline-none focus:border-fg-subtle focus:ring-1 focus:ring-fg/10 transition-all"
+        className="w-full bg-surface-raised border border-border rounded-[8px] px-4 py-2.5 text-[13px] text-fg placeholder:text-fg-subtle focus:outline-none focus:border-fg-subtle focus:ring-1 focus:ring-fg/10 transition-all mb-6"
       />
 
       <div className="flex items-center gap-3 mt-auto">
         <Button variant="subtle" onClick={onBack}>
           Back
         </Button>
-        <Button
-          variant={hasName ? "primary" : "ghost"}
-          className="flex-1"
-          onClick={onNext}
-        >
-          {hasName ? "Continue" : "Skip"}
+        <Button variant="primary" className="flex-1" onClick={onNext}>
+          Continue
         </Button>
       </div>
     </div>
@@ -360,8 +333,6 @@ function StepBackend({
   backendReachable,
   keyStatus,
   missingRequired,
-  checking,
-  onRecheck,
   onFinish,
   onBack,
 }) {
@@ -372,27 +343,17 @@ function StepBackend({
       </h1>
 
       {backendReachable === false ? (
-        <div className="bg-surface-raised border border-border rounded-lg px-4 py-3 mb-4 flex items-start justify-between gap-3">
-          <div>
-            <p className="text-[12.5px] text-fg font-medium mb-0.5">
-              Backend not running
-            </p>
-            <p className="text-[12px] text-fg-muted leading-relaxed">
-              Run{" "}
-              <code className="font-mono text-[11px] bg-bg px-1.5 py-0.5 rounded text-fg">
-                cd backend &amp;&amp; npm start
-              </code>{" "}
-              then recheck.
-            </p>
-          </div>
-          <button
-            onClick={onRecheck}
-            disabled={checking}
-            className="shrink-0 mt-0.5 p-1.5 rounded-md text-fg-subtle hover:text-fg hover:bg-bg transition-colors disabled:opacity-40"
-            aria-label="Recheck backend connection"
-          >
-            <RefreshCw size={14} className={checking ? "animate-spin" : ""} />
-          </button>
+        <div className="bg-surface-raised border border-border rounded-lg px-4 py-3 mb-4">
+          <p className="text-[12.5px] text-fg font-medium mb-0.5">
+            Backend not running
+          </p>
+          <p className="text-[12px] text-fg-muted leading-relaxed">
+            Run{" "}
+            <code className="font-mono text-[11px] bg-bg px-1.5 py-0.5 rounded text-fg">
+              cd backend &amp;&amp; npm start
+            </code>{" "}
+            first.
+          </p>
         </div>
       ) : (
         <p className="text-[13px] text-fg-muted leading-relaxed mb-4">
@@ -440,9 +401,7 @@ function StepBackend({
           onClick={onFinish}
           disabled={backendReachable === null}
         >
-          {backendReachable === false || missingRequired.length > 0
-            ? "Continue anyway"
-            : "Complete setup"}
+          {missingRequired.length > 0 ? "Continue anyway" : "Complete setup"}
         </Button>
       </div>
     </div>

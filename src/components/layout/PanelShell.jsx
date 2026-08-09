@@ -1,21 +1,15 @@
+import SprocketRail from "./SprocketRail.jsx";
 import PanelHeader from "./PanelHeader.jsx";
 
 export default function PanelShell({ state, progress, children }) {
-  const isPlayer = state === "player";
-
-  if (isPlayer) {
-    return (
-      <div className="w-full h-screen bg-bg flex flex-col overflow-hidden text-fg font-sans">
-        {children}
-      </div>
-    );
-  }
-
   return (
-    <div className="w-full h-screen bg-bg flex flex-col overflow-hidden text-fg font-sans">
-      <PanelHeader state={state} progress={progress} />
-      <div className="flex-1 px-5 pb-6 flex flex-col overflow-hidden">
-        {children}
+    <div className="w-full h-screen min-h-140 bg-ink flex overflow-hidden text-paper font-sans">
+      <SprocketRail />
+      <div className="flex-1 flex flex-col min-w-0">
+        <PanelHeader state={state} progress={progress} />
+        <div className="flex-1 px-6 py-7 flex flex-col relative overflow-hidden">
+          {children}
+        </div>
       </div>
     </div>
   );
