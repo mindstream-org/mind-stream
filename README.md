@@ -6,7 +6,6 @@
 A Chrome extension that reads your expression and generates a short personalized focus-reset reel. Three-second check-in, fully local pipeline.
 
 </div>
-
 ---
 
 ## The Problem
