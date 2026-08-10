@@ -237,15 +237,6 @@ Script is personalized using all three context fields:
 
 ---
 
-## Live Demo -- 5-Minute Flow
-
-1. **(30s)** Open side panel. Show idle screen. "Most tools just remind you to take a break. MindStream reads your expression and generates something personal."
-2. **(45s)** Show architecture diagram. Three phases, all local.
-3. **(60s)** Phase 2 -- show training curves and confusion matrices. "Sulav trained this on 66K faces. 69.9% on 8 classes, 5.6x above random."
-4. **(60s)** Click Check in, let the popup record, confirm. Show processing screen.
-5. **(30s)** Show backend terminal -- script, keywords, download, TTS, compose.
-6. **(60s)** Notification fires. Watch reel in the panel.
-7. **(15s)** "One clip. Three phases. Your face told it what to say."
 
 ## Future Improvements
 
