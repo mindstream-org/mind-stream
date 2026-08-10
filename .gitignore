@@ -43,5 +43,7 @@ backend/output/**/*.mp3
 backend/output/**/*.mp4
 backend/output/**/*.wav
 backend/output/**/*.srt
+backend/output/**/*.json
+backend/output/render_profile_calibration.json
 
 Video_gen_inspiration_project/
