@@ -15,7 +15,7 @@ chrome.sidePanel
   .setPanelBehavior({ openPanelOnActionClick: true })
   .catch((error) => console.error(error));
 
-// --- Storage helpers --------------------------------------------------
+// capture_window_id is persisted (not in-memory) so it survives MV3 service worker restarts.
 const DEFAULT_CYCLE = {
   cycle_status: CYCLE_STATUS.IDLE,
   cycle_started_at: null,
@@ -24,8 +24,6 @@ const DEFAULT_CYCLE = {
   reel_url: null,
   emotion_label: null,
   error_message: null,
-  // Persisted so it survives MV3 service worker restarts — an in-memory
-  // tracker would silently forget an open capture window and let a second spawn.
   capture_window_id: null,
 };
 
@@ -48,44 +46,31 @@ async function openSidePanel() {
   }
 }
 
-/** True only if a window with this id genuinely still exists. */
 async function windowStillExists(windowId) {
   if (windowId == null) return false;
   try {
     await chrome.windows.get(windowId);
     return true;
   } catch {
-    return false; // closed, or the id is stale from a previous session
+    return false;
   }
 }
 
-/**
- * Moves the cycle into "pending" and opens the capture window.
- * If the window is already open, focuses it. If a job is already running,
- * opens the side panel instead of spawning a second capture.
- */
 async function startCheckInCycle() {
   const cycle = await getCycle();
 
-  // Don't allow starting a new check-in if one is already in progress or ready to view
   if (cycle.cycle_status === CYCLE_STATUS.PENDING) {
-    // If the capture window is still open, just focus it
     if (await windowStillExists(cycle.capture_window_id)) {
-      console.log("[mindstream] capture window already open, focusing it instead of opening another");
       await chrome.windows.update(cycle.capture_window_id, { focused: true });
       return;
     }
-    // If a clip has been saved or a job is running, block new check-ins
-    // and show the side panel's "processing" view instead.
     if (cycle.job_id || cycle.clip_path) {
-      console.log("[mindstream] processing already in progress — opening side panel");
       await openSidePanel();
       return;
     }
   }
 
   if (cycle.cycle_status === CYCLE_STATUS.READY) {
-    console.log("[mindstream] previous reel not viewed yet, opening side panel instead of starting new check-in");
     await openSidePanel();
     return;
   }
@@ -110,23 +95,20 @@ async function startCheckInCycle() {
   chrome.alarms.create(ALARM_NAMES.JOB_POLL, { periodInMinutes: JOB_POLL_INTERVAL_MINUTES });
 }
 
-// If the capture window closes before anything was submitted, reset to idle.
-// If it closes after a clip was saved or job was submitted, that's normal — keep processing.
+// If the capture window closes before the user submits anything, reset to idle.
+// If it closes after a clip was saved or job submitted, that's the normal flow.
 chrome.windows.onRemoved.addListener(async (windowId) => {
   const cycle = await getCycle();
   if (cycle.capture_window_id !== windowId) return;
 
   if (cycle.cycle_status === CYCLE_STATUS.PENDING && !cycle.job_id && !cycle.clip_path) {
-    console.log("[mindstream] capture window closed before submitting anything — resetting to idle");
     await setCycle({ cycle_status: CYCLE_STATUS.IDLE, capture_window_id: null, cycle_started_at: null });
     chrome.alarms.clear(ALARM_NAMES.JOB_POLL);
   } else {
-    // Normal close — clip was saved or job is running. Clear window id, keep cycle PENDING.
     await setCycle({ capture_window_id: null });
   }
 });
 
-// --- Lifecycle: ensure recurring pulse alarm exists -------------------
 async function ensurePulseAlarm() {
   const alarm = await chrome.alarms.get(ALARM_NAMES.PULSE);
   if (!alarm) {
@@ -134,35 +116,23 @@ async function ensurePulseAlarm() {
   }
 }
 
-chrome.runtime.onInstalled.addListener(() => {
-  ensurePulseAlarm();
-});
+chrome.runtime.onInstalled.addListener(() => ensurePulseAlarm());
+chrome.runtime.onStartup?.addListener(() => ensurePulseAlarm());
 
-chrome.runtime.onStartup?.addListener(() => {
-  ensurePulseAlarm();
-});
-
-// --- Alarms --------------------------------------------------------------
 chrome.alarms.onAlarm.addListener(async (alarm) => {
-  if (alarm.name === ALARM_NAMES.PULSE) {
-    await handlePulseTick();
-  } else if (alarm.name === ALARM_NAMES.JOB_POLL) {
-    await handleJobPoll();
-  }
+  if (alarm.name === ALARM_NAMES.PULSE) await handlePulseTick();
+  else if (alarm.name === ALARM_NAMES.JOB_POLL) await handleJobPoll();
 });
 
-/** Fires on each PULSE alarm tick. Prevents stacked check-ins. */
 async function handlePulseTick() {
   const cycle = await getCycle();
 
   switch (cycle.cycle_status) {
     case CYCLE_STATUS.PENDING:
-      // Already in flight — do nothing, let the alarm fire again later.
-      return;
+      return; // already in flight
 
     case CYCLE_STATUS.READY:
-      // Finished but unviewed — nudge again rather than starting a new cycle.
-      createReadyNotification();
+      createReadyNotification(); // nudge without starting a new cycle
       return;
 
     case CYCLE_STATUS.IDLE:
@@ -190,7 +160,6 @@ function createReadyNotification() {
   });
 }
 
-/** Polls the local backend for job completion (project summary §7, Phase 3). */
 let activePollTimeout = null;
 
 async function pollActiveJob() {
@@ -200,9 +169,7 @@ async function pollActiveJob() {
   }
 
   const cycle = await getCycle();
-  if (cycle.cycle_status !== CYCLE_STATUS.PENDING || !cycle.job_id) {
-    return;
-  }
+  if (cycle.cycle_status !== CYCLE_STATUS.PENDING || !cycle.job_id) return;
 
   await handleJobPoll();
 
@@ -222,15 +189,12 @@ async function handleJobPoll() {
 
   try {
     const response = await fetch(API_ROUTES.JOB_STATUS(cycle.job_id));
-    if (!response.ok) throw new Error(`job status request failed: ${response.status}`);
-    const data = await response.json(); // expected: { status, reel_url?, emotion_label?, error? }
+    if (!response.ok) throw new Error(`job status ${response.status}`);
+    const data = await response.json();
 
     if (data.status === "ready") {
       chrome.alarms.clear(ALARM_NAMES.JOB_POLL);
-      if (activePollTimeout) {
-        clearTimeout(activePollTimeout);
-        activePollTimeout = null;
-      }
+      if (activePollTimeout) { clearTimeout(activePollTimeout); activePollTimeout = null; }
       await setCycle({
         cycle_status: CYCLE_STATUS.READY,
         reel_url: data.reel_url ?? null,
@@ -240,10 +204,7 @@ async function handleJobPoll() {
       createReadyNotification();
     } else if (data.status === "failed") {
       chrome.alarms.clear(ALARM_NAMES.JOB_POLL);
-      if (activePollTimeout) {
-        clearTimeout(activePollTimeout);
-        activePollTimeout = null;
-      }
+      if (activePollTimeout) { clearTimeout(activePollTimeout); activePollTimeout = null; }
       await setCycle({
         cycle_status: CYCLE_STATUS.FAILED,
         error_message: data.error ?? "Something went wrong while generating your reel.",
@@ -257,61 +218,46 @@ async function handleJobPoll() {
         priority: 1,
       });
     }
-    // status === "processing" -> nothing to do, poll again next tick.
+    // status === "processing": wait for next poll
   } catch (err) {
-    // Backend not reachable (e.g. local server isn't running yet during dev).
-    // Don't fail the cycle over a transient network error — just try again.
     console.warn("job poll failed:", err);
   }
 }
 
-// Check on worker startup if a job was already in progress
+// Resume polling if the service worker restarts mid-job.
 getCycle().then((cycle) => {
   if (cycle.cycle_status === CYCLE_STATUS.PENDING && cycle.job_id) {
     pollActiveJob();
   }
 });
 
-// --- Notification clicks --------------------------------------------------
 chrome.notifications.onClicked.addListener(async (notificationId) => {
   chrome.notifications.clear(notificationId);
-
   if (notificationId === NOTIFICATION_IDS.PULSE_PROMPT) {
     await startCheckInCycle();
-    return;
-  }
-
-  if (notificationId === NOTIFICATION_IDS.REEL_READY || notificationId === NOTIFICATION_IDS.REEL_ERROR) {
+  } else if (notificationId === NOTIFICATION_IDS.REEL_READY || notificationId === NOTIFICATION_IDS.REEL_ERROR) {
     await openSidePanel();
   }
 });
 
 chrome.notifications.onButtonClicked.addListener(async (notificationId, buttonIndex) => {
   chrome.notifications.clear(notificationId);
-
-  if (notificationId === NOTIFICATION_IDS.PULSE_PROMPT) {
-    if (buttonIndex === 0) { // "Start Check-in"
-      await startCheckInCycle();
-    }
-    // if buttonIndex === 1 ("Not Now"), we just cleared the notification
-  } else if (notificationId === NOTIFICATION_IDS.REEL_READY) {
-    if (buttonIndex === 0) { // "Watch Reel"
-      await openSidePanel();
-    }
-    // if buttonIndex === 1 ("Later"), we just cleared the notification
+  if (notificationId === NOTIFICATION_IDS.PULSE_PROMPT && buttonIndex === 0) {
+    await startCheckInCycle();
+  } else if (notificationId === NOTIFICATION_IDS.REEL_READY && buttonIndex === 0) {
+    await openSidePanel();
   }
 });
 
-/** Queries the active tab and classifies it into a broad activity category. */
+// Classifies the active tab domain into a broad activity category.
 async function getActiveTabInfo() {
   try {
     const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     if (!tab || !tab.url) return null;
 
-    const url = new URL(tab.url);
-    const domain = url.hostname;
-
+    const domain = new URL(tab.url).hostname;
     let category = "browsing";
+
     if (domain.includes("youtube.com") || domain.includes("netflix.com") || domain.includes("twitch.tv") || domain.includes("tiktok.com")) {
       category = "entertainment";
     } else if (domain.includes("github.com") || domain.includes("stackoverflow.com") || domain.includes("developer") || domain.includes("localhost")) {
@@ -331,11 +277,10 @@ async function getActiveTabInfo() {
   }
 }
 
-// --- Messages from the panel and the capture window -----------------------
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === MESSAGE_TYPES.START_CHECKIN) {
     startCheckInCycle().then(() => sendResponse({ ok: true }));
-    return true; // keep the message channel open for the async response
+    return true;
   }
 
   if (message?.type === MESSAGE_TYPES.CANCEL_CHECKIN || message?.type === MESSAGE_TYPES.CANCEL_GENERATION) {
@@ -343,7 +288,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     getCycle().then((cycle) => {
       if (cycle.job_id) {
         fetch(API_ROUTES.CANCEL_JOB(cycle.job_id), { method: "POST" }).catch((err) =>
-          console.warn("[background] Failed to cancel job on backend:", err)
+          console.warn("[background] Failed to cancel job:", err)
         );
       }
       setCycle({
@@ -369,24 +314,22 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       payload.clip_path = message.clipPath;
 
       try {
-        console.log("[background] Submitting check-in to server...", payload);
         const response = await fetch(API_ROUTES.CHECK_IN, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         });
 
-        if (!response.ok) throw new Error(`Check-in request failed with status ${response.status}`);
+        if (!response.ok) throw new Error(`Check-in failed: ${response.status}`);
         const data = await response.json();
 
-        console.log("[background] Check-in submitted, job ID:", data.job_id);
         await setCycle({ clip_path: message.clipPath, job_id: data.job_id });
         pollActiveJob();
       } catch (err) {
-        console.error("[background] Failed to check-in with Express server:", err);
+        console.error("[background] Check-in failed:", err);
         await setCycle({
           cycle_status: CYCLE_STATUS.FAILED,
-          error_message: "Could not connect to the local reel generation server on port 4000. Start it by running 'npm start' in the backend directory.",
+          error_message: "Could not connect to the local server on port 4000. Run 'npm start' in the backend directory.",
         });
       }
     });

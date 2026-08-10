@@ -6,7 +6,6 @@ import ConfirmState from "../panel/states/ConfirmState.jsx";
 import CountdownState from "../panel/states/CountdownState.jsx";
 import Button from "../components/ui/Button.jsx";
 import { useCameraCapture } from "../hooks/useCameraCapture.js";
-import { useCycleStatus } from "../hooks/useCycleStatus.js";
 import { saveCapture } from "../lib/checkIn.js";
 import { sendMessage } from "../lib/chromeApi.js";
 import { MESSAGE_TYPES, PANEL_STATE } from "../lib/constants.js";
@@ -15,23 +14,19 @@ import { MESSAGE_TYPES, PANEL_STATE } from "../lib/constants.js";
  * Popup window that owns the webcam capture flow.
  * getUserMedia only works reliably in a popup, not the side panel.
  *
- * Flow: skeleton → capture (3s) → confirm → countdown → close
+ * Flow: skeleton -> capture (3s) -> confirm -> countdown -> close
  */
 export default function CaptureWindow() {
   const camera = useCameraCapture();
-  const { setCycle } = useCycleStatus();
   const startedRef = useRef(false);
   const [confirmed, setConfirmed] = useState(false);
   const [countdownProgress, setCountdownProgress] = useState(null);
   const savePromiseRef = useRef(null);
-
-  // Single trigger point — no side panel to race against here.
   useEffect(() => {
     if (!startedRef.current) {
       startedRef.current = true;
       camera.start();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Safety net: stop the camera stream if this window is force-closed.
@@ -43,6 +38,7 @@ export default function CaptureWindow() {
       window.removeEventListener("pagehide", cleanup);
       window.removeEventListener("beforeunload", cleanup);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [camera.stopStream]);
 
   useEffect(() => {
