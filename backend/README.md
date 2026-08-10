@@ -5,12 +5,12 @@ Express server + Python pipeline. Runs locally on port 4000.
 ## Pipeline
 
 ```
-Extension (WebM clip) → predict_emotion.py (FER+ model) → reel_generator.py (Llama 3.3 70B via Groq + Pexels + MiMo TTS) → MP4 reel
+Extension (WebM clip) -> predict_emotion.py (FER+ model) -> reel_generator.py (Gemini/Groq + Pexels + MiMo TTS) -> MP4 reel
 ```
 
 1. Extension POSTs `/check-in` with `clip_path`, `context`, `preset`
-2. Server spawns `predict_emotion.py` → writes `capture_<id>_result.json`
-3. Chokidar watcher picks up the JSON → spawns `reel_generator.py`
+2. Server spawns `predict_emotion.py` -> writes `capture_<id>_result.json`
+3. Chokidar watcher picks up the JSON -> spawns `reel_generator.py`
 4. Extension polls `/jobs/:id` until `status: "ready"`
 
 ## Setup
@@ -29,27 +29,27 @@ npm start
 
 | Key | Required | Purpose |
 |-----|----------|---------|
-| `GROQ_API_KEY` | ✓ | Script generation (Llama 3.3 70B) |
+| `GEMINI_API_KEY` | ✓ (Default) | Script generation (Gemini 2.0 Flash) |
 | `PEXELS_API_KEY` | ✓ | Background video clips |
 | `MIMO_API_KEY` | ✓ | TTS narration (Dean voice) |
-| `GEMINI_API_KEY` | optional | Alternative LLM provider |
+| `GROQ_API_KEY` | optional | Alternative script provider (Llama 3.3 70B) |
 | `PIXABAY_API_KEY` | optional | Fallback video source |
 
-Set `SCRIPT_MODEL_PROVIDER=groq` and `SCRIPT_MODEL_NAME=llama-3.3-70b-versatile` in `.env` (already the default in `.env.example`).
+By default, MindStream uses Google Gemini for script generation. If you prefer to use Groq, set `SCRIPT_MODEL_PROVIDER=groq` and `SCRIPT_MODEL_NAME=llama-3.3-70b-versatile` in your `.env` and supply `GROQ_API_KEY`.
 
-Get keys: [Groq](https://console.groq.com/keys) · [Pexels](https://www.pexels.com/api/) · [MiMo](https://platform.xiaomimimo.com/console/api-keys)
+Get keys: [Gemini](https://aistudio.google.com/app/apikey) · [Pexels](https://www.pexels.com/api/) · [MiMo](https://platform.xiaomimimo.com/console/api-keys) · [Groq](https://console.groq.com/keys)
 
 ## Emotion Model
 
 - **File:** `core_ai/MODELS/CV/best_ferplus_emotion.keras`
 - **Architecture:** MobileNetV2 + classification head, trained on FER+
-- **Input:** 128×128 RGB, MobileNetV2 `preprocess_input` (→ [-1, 1])
+- **Input:** 128x128 RGB, MobileNetV2 `preprocess_input` (-> [-1, 1])
 - **Output:** softmax over 8 classes: `angry · contempt · disgust · fear · happy · neutral · sad · surprise`
 - **Face detection:** OpenCV Haar cascade (frontal face), falls back to full frame
 
 ## Ambient Audio
 
-One MP3 per emotion goes in `assets/audio/`. See `assets/audio/README.md` for AI generation prompts.
+One MP3 per emotion goes in `assets/audio/`.
 
 ```
 assets/audio/
@@ -63,7 +63,7 @@ assets/audio/
 └── surprise.mp3
 ```
 
-Reel generation continues without audio files — TTS narration still plays.
+Reel generation continues gracefully if audio files are missing, playing TTS narration.
 
 ## Render Presets
 
@@ -77,13 +77,13 @@ MINDSTREAM_REEL_PRESET=fast npm start
 | `normal` | Background-friendly. Single worker, CPU-quota limited on Linux, niceness 10. |
 | `fast` | Multi-core. Calibrates worker count on first run and caches it. Uses x264 ultrafast. |
 
-Both output 720×1280 @ 24fps portrait MP4.
+Both output 720x1280 @ 24fps portrait MP4.
 
 ## Test from CLI
 
 ```bash
 source venv/bin/activate
-python reel_generator.py   # uses data/sample_emotion_result.json
+python reel_generator.py   # uses inline sample parameters
 python predict_emotion.py --clip /path/to/capture.webm
 ```
 
@@ -91,7 +91,7 @@ python predict_emotion.py --clip /path/to/capture.webm
 
 ```
 output/
-├── reels/    # Final MP4s — served at http://localhost:4000/reels/<filename>
+├── reels/    # Final MP4s -- served at http://localhost:4000/reels/<filename>
 ├── audio/    # TTS files (auto-generated, auto-cleaned)
 └── temp/     # Downloaded stock clips (auto-deleted after compositing)
 ```
