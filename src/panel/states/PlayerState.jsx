@@ -34,12 +34,12 @@ export default function PlayerState({ reelUrl, onDone }) {
       ) : (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-bg z-0">
           <p className="text-[12px] text-fg-subtle font-mono text-center px-6">
-            Video unavailable — make sure the backend is running
+            Video unavailable: make sure backend is running
           </p>
         </div>
       )}
 
-      {/* Top overlay — auto-hides on inactivity */}
+      {/* Top overlay */}
       <div
         className={`relative z-10 flex items-center justify-between p-4 bg-gradient-to-b from-black/70 to-transparent transition-opacity duration-300 ${
           visible ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"

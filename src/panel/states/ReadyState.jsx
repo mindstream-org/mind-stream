@@ -22,7 +22,7 @@ export default function ReadyState({ emotionLabel = "neutral", onPlay, onDismiss
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.35, ease: "easeOut" }}
     >
-      {/* ── Headline ── */}
+      
       <div>
         <h1 className="text-[22px] font-semibold leading-snug tracking-[-0.03em] text-fg">
           Your reel is ready.
@@ -32,7 +32,7 @@ export default function ReadyState({ emotionLabel = "neutral", onPlay, onDismiss
         </p>
       </div>
 
-      {/* ── Eyes with smile — lives outside the card ── */}
+      
       <motion.div
         className="flex justify-center"
         initial={{ scale: 0.8, opacity: 0 }}
@@ -42,7 +42,7 @@ export default function ReadyState({ emotionLabel = "neutral", onPlay, onDismiss
         <EyesGaze size="xl" showSmile={true} />
       </motion.div>
 
-      {/* ── Thumbnail card — just the play target ── */}
+      
       <motion.div
         onClick={onPlay}
         role="button"
@@ -90,7 +90,7 @@ export default function ReadyState({ emotionLabel = "neutral", onPlay, onDismiss
         </div>
       </motion.div>
 
-      {/* ── Dismiss ── */}
+      
       <button
         onClick={onDismiss}
         className="w-full text-xs font-medium text-fg-subtle hover:text-fg transition-colors text-center py-1 cursor-pointer shrink-0"

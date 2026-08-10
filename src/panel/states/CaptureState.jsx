@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { CAPTURE_DURATION_MS } from "../../lib/constants.js";
 
 /**
- * `videoRef` is provided by useCameraCapture() in the parent — this
+ * `videoRef` is provided by useCameraCapture() in the parent -- this
  * component is purely presentational so it can also be exercised in
  * isolation (e.g. Storybook-style preview) without a real camera.
  */

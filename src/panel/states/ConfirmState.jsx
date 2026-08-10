@@ -2,7 +2,7 @@ import Button from "../../components/ui/Button.jsx";
 
 /**
  * Sits between "clip recorded" and "submit to backend". Nothing gets sent
- * anywhere until the user explicitly confirms here — declining discards
+ * anywhere until the user explicitly confirms here -- declining discards
  * the clip outright.
  */
 export default function ConfirmState({ blobUrl, onAccept, onDecline }) {
@@ -30,7 +30,7 @@ export default function ConfirmState({ blobUrl, onAccept, onDecline }) {
         Nothing's been sent yet. Say the word and we'll turn this into your reel.
       </p>
 
-      {/* Declining discards the clip — nothing gets submitted */}
+      {/* Declining discards the clip -- nothing gets submitted */}
       <div className="flex gap-2.5 mt-auto">
         <Button variant="primary" className="flex-1" onClick={onAccept}>
           Let's go!

@@ -3,7 +3,7 @@ import Button from "../../components/ui/Button.jsx";
 import { COUNTDOWN_SECONDS } from "../../lib/constants.js";
 
 /**
- * Shown after "Let's go!" — a compact confirmation that the reel is being
+ * Shown after "Let's go!" -- a compact confirmation that the reel is being
  * generated. The decreasing progress is rendered via `onProgress` so the
  * parent can feed it into the header's bottom border instead of drawing a
  * separate bar.

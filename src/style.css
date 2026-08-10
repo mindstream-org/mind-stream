@@ -1,12 +1,12 @@
 @import "tailwindcss";
 
 /* -----------------------------------------------------------------------
-   MindStream design tokens — fully achromatic, shadcn-aligned.
+   MindStream design tokens: fully achromatic, shadcn-aligned.
    Zinc-based neutral dark + white-forward typography.
 ----------------------------------------------------------------------- */
 @theme {
   /* Backgrounds */
-  --color-bg:             #09090b;   /* zinc-950 — matches logo background */
+  --color-bg:             #09090b;   /* zinc-950: matches logo background */
   --color-surface:        #111113;   /* subtle elevation */
   --color-surface-raised: #1c1c1f;   /* cards, inputs */
 
@@ -15,7 +15,7 @@
   --color-border-subtle:  #18181b;   /* zinc-900 */
 
   /* Foregrounds */
-  --color-fg:             #fafafa;   /* zinc-50 — matches logo line art */
+  --color-fg:             #fafafa;   /* zinc-50: matches logo line art */
   --color-fg-muted:       #a1a1aa;   /* zinc-400 */
   --color-fg-subtle:      #52525b;   /* zinc-600 */
 

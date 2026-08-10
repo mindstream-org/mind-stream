@@ -22,12 +22,9 @@ export default function SidePanel() {
   const isPending = cycle.cycle_status === CYCLE_STATUS.PENDING;
 
   const handleAcceptCheckIn = () => {
-    if (isStarting) return; // guard against double-clicks
+    if (isStarting) return;
     setIsStarting(true);
-
     sendMessage({ type: MESSAGE_TYPES.START_CHECKIN }).then(() => {
-      // The capture window (background opened it) owns the rest of the
-      // flow from here — the panel doesn't need to stay open for it.
       closeSidePanel();
       setIsStarting(false);
     });
@@ -102,7 +99,6 @@ export default function SidePanel() {
     );
   }
 
-  // --- Resolve which visual state to render ---------------------------
   let panelState = PANEL_STATE.IDLE;
   if (cycle.cycle_status === CYCLE_STATUS.FAILED) panelState = PANEL_STATE.ERROR;
   else if (cycle.cycle_status === CYCLE_STATUS.READY) panelState = playing ? PANEL_STATE.PLAYER : PANEL_STATE.READY;

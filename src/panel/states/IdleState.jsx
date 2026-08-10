@@ -1,10 +1,9 @@
-import React from "react";
 import Button from "../../components/ui/Button.jsx";
 
 export default function IdleState({ onAccept, onDismiss }) {
   return (
     <div className="flex flex-col h-full justify-between animate-fadein py-4 px-2">
-      {/* ── Center Content (Unboxed) ── */}
+      
       <div className="flex-1 flex flex-col items-center justify-center text-center space-y-6">
         {/* Logo */}
         <div className="py-2">
@@ -56,7 +55,7 @@ export default function IdleState({ onAccept, onDismiss }) {
         </div>
       </div>
 
-      {/* ── Footer Actions (Unboxed) ── */}
+      
       <div className="shrink-0 space-y-3 pt-2">
         <Button
           variant="primary"

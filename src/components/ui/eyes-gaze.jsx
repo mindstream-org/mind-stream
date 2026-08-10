@@ -1,12 +1,4 @@
-import React from "react";
-
-/**
- * EyesGaze — Animated eyes gaze loader component.
- *
- * Props:
- *   - size: "sm" | "md" | "lg" | "xl" (default: "lg")
- *   - className: string
- */
+// Props: size ("sm" | "md" | "lg" | "xl"), className, showSmile
 export function EyesGaze({ size = "lg", className = "", showSmile = false }) {
   const sizeMap = {
     sm: "w-10 h-5",
@@ -56,7 +48,7 @@ export function EyesGaze({ size = "lg", className = "", showSmile = false }) {
           }
         `}</style>
 
-        {/* ── LEFT EYE — thin white line-art ── */}
+        
         <g className="eye-left-socket">
           <ellipse cx="25" cy="25" rx="18" ry="14" stroke="#fafafa" strokeWidth="1.5" />
           <g className="eye-left-gaze">
@@ -67,7 +59,7 @@ export function EyesGaze({ size = "lg", className = "", showSmile = false }) {
           </g>
         </g>
 
-        {/* ── RIGHT EYE — thin white line-art ── */}
+        
         <g className="eye-right-socket">
           <ellipse cx="75" cy="25" rx="18" ry="14" stroke="#fafafa" strokeWidth="1.5" />
           <g className="eye-right-gaze">
@@ -78,7 +70,7 @@ export function EyesGaze({ size = "lg", className = "", showSmile = false }) {
           </g>
         </g>
 
-        {/* ── SMILE ── */}
+        
         {showSmile && (
           <path
             d="M 42 42 Q 50 48 58 42"

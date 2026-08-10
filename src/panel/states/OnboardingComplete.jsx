@@ -19,16 +19,6 @@ export default function OnboardingComplete({ onContinue }) {
       className="flex flex-col h-full items-center justify-center text-center cursor-pointer"
       onClick={onContinue}
     >
-      {/* TODO(prash)
-          Replace with the final hero illustration.
-          Asset:
-          - Transparent SVG/Lottie
-          - ~180×140
-          - White line-art, matching logo aesthetic
-          - Subtle checkmark or "ready" state animation
-          - Could be a gentle pulse or fade-in of the illustration
-      */}
-
       <div className="mb-8">
         <Logo size="medium" />
       </div>

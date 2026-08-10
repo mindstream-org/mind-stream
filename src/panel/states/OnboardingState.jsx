@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Gauge, Zap, RefreshCw } from "lucide-react";
 import { MotionConfig, motion, AnimatePresence } from "motion/react";
 import Button from "../../components/ui/Button.jsx";
@@ -50,7 +50,7 @@ export default function OnboardingState({
   onStepChange,
 }) {
   const [step, setStep] = useState(1);
-  const prevStepRef = useRef(1);
+  const [prevStep, setPrevStep] = useState(1);
   const [name, setName] = useState(
     settings?.user_name && settings.user_name !== "friend"
       ? settings.user_name
@@ -62,19 +62,6 @@ export default function OnboardingState({
   const [keyStatus, setKeyStatus] = useState(null);
   const [backendReachable, setBackendReachable] = useState(null);
   const [checking, setChecking] = useState(false);
-  const [isInitialMount, setIsInitialMount] = useState(true);
-
-  // Track previous step for conditional animation
-  useEffect(() => {
-    prevStepRef.current = step;
-  }, [step]);
-
-  useEffect(() => {
-    // After first render, disable initial mount flag
-    if (isInitialMount) {
-      setIsInitialMount(false);
-    }
-  }, [isInitialMount]);
 
   // Notify parent of step changes for header animation
   useEffect(() => {
@@ -104,8 +91,23 @@ export default function OnboardingState({
   }, []);
 
   useEffect(() => {
-    checkBackend();
-  }, [checkBackend]);
+    let active = true;
+    fetch(API_ROUTES.HEALTH, { signal: AbortSignal.timeout(3000) })
+      .then((r) => r.json())
+      .then((data) => {
+        if (!active) return;
+        setKeyStatus(data.keys ?? {});
+        setBackendReachable(true);
+      })
+      .catch(() => {
+        if (!active) return;
+        setKeyStatus({});
+        setBackendReachable(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const missingRequired = keyStatus
     ? REQUIRED_KEYS.filter((k) => keyStatus[k.id] === false)
@@ -118,8 +120,8 @@ export default function OnboardingState({
       : backendReachable === false || missingRequired.length > 0;
   const visibleSteps = needsConfigStep ? TOTAL_STEPS : TOTAL_STEPS - 1;
 
-  const goNext = () => setStep((s) => s + 1);
-  const goBack = () => setStep((s) => s - 1);
+  const goNext = () => setStep((s) => { setPrevStep(s); return s + 1; });
+  const goBack = () => setStep((s) => { setPrevStep(s); return s - 1; });
 
   const saveNameAndNext = () => {
     updateSettings({ user_name: name.trim() || "friend" });
@@ -152,7 +154,7 @@ export default function OnboardingState({
     }
   }, [step, needsConfigStep, backendReachable, finish]);
 
-  const isComingFromStep1 = prevStepRef.current === 1 && step === 2;
+  const isComingFromStep1 = prevStep === 1 && step === 2;
 
   return (
     <MotionConfig transition={{ duration: 0.75, ease: [0.25, 0.1, 0.25, 1] }}>
@@ -243,15 +245,6 @@ function StepWelcome({ onNext, showLogo = true }) {
   return (
     <div className="flex h-full flex-col animate-fadein">
       <div className="flex-1 flex flex-col justify-center">
-        {/* TODO(prash)
-            Replace with the final animated hero.
-            Asset:
-            - Transparent SVG/Lottie
-            - ~220x180
-            - White line-art
-            - Slight breathing animation
-        */}
-
         <div className="flex justify-center mb-8">
           {showLogo && <Logo size="medium" />}
         </div>
@@ -527,7 +520,7 @@ function KeyRow({ provider, configured }) {
                 : "text-fg-subtle"
           }`}
         >
-          {isConfigured ? "✓ set" : isMissing ? "missing" : "—"}
+          {isConfigured ? "✓ set" : isMissing ? "missing" : "--"}
         </span>
         {isMissing && (
           <a

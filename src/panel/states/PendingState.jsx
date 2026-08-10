@@ -1,4 +1,3 @@
-import React from "react";
 import { EyesGaze } from "../../components/ui/eyes-gaze.jsx";
 
 export default function PendingState({ hasJobId, hasClipSaved, onCancel }) {
@@ -30,15 +29,15 @@ export default function PendingState({ hasJobId, hasClipSaved, onCancel }) {
 
   return (
     <div className="flex flex-col h-full justify-between animate-fadein py-4 px-2">
-      {/* ── Center Content — mirrors IdleState rhythm ── */}
+      {/* Center Content */}
       <div className="flex-1 flex flex-col items-center justify-center text-center space-y-6">
 
-        {/* EyesGaze — same role as the logo on home screen */}
+        {/* EyesGaze: same role as logo on idle screen */}
         <div className="py-2">
           <EyesGaze size="xl" />
         </div>
 
-        {/* Headline & Description — identical scale to home */}
+        {/* Headline & Description -- identical scale to home */}
         <div className="space-y-2 max-w-[280px]">
           <h2 className="text-2xl font-bold tracking-tight text-zinc-100">
             {headline}
@@ -48,7 +47,7 @@ export default function PendingState({ hasJobId, hasClipSaved, onCancel }) {
           </p>
         </div>
 
-        {/* Phase badge + Step list — replaces the icon row from home */}
+        {/* Phase badge + Step list -- replaces the icon row from home */}
         <div className="w-full max-w-[280px] space-y-3 pt-2 border-t border-zinc-800/60">
           <p className="text-[10px] font-mono tracking-wider text-zinc-500 uppercase text-left">
             {phaseLabel}
@@ -66,7 +65,7 @@ export default function PendingState({ hasJobId, hasClipSaved, onCancel }) {
         </div>
       </div>
 
-      {/* ── Footer — same slot as the button on home ── */}
+      
       {(hasJobId || hasClipSaved) && (
         <div className="shrink-0 text-center pt-2">
           <button
