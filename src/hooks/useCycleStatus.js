@@ -12,12 +12,7 @@ const DEFAULT_CYCLE = {
   error_message: null,
 };
 
-/**
- * Single source of truth for "where are we in the check-in cycle".
- * The background service worker is the main writer (see background/index.js);
- * this hook just keeps the panel UI in sync and exposes a setter for the
- * panel's own transitions (e.g. marking a reel as viewed).
- */
+// Keeps the panel UI in sync with the cycle state written by background/index.js.
 export function useCycleStatus() {
   const [cycle, setCycleState] = useState(DEFAULT_CYCLE);
   const [loaded, setLoaded] = useState(false);

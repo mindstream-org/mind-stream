@@ -1,14 +1,10 @@
-// Every chrome.* call funnels through here. Two reasons:
-//   1. `npm run dev` opens the panel in a plain browser tab (no `chrome`
-//      global with extension APIs), so components would crash immediately
-//      without a fallback — this makes local UI development possible.
-//   2. One place to swap implementations later instead of hunting through
-//      every component for a raw `chrome.storage.local.get(...)` call.
+// Chrome API wrappers with dev-mode fallbacks.
+// When running via `npm run dev` (no extension context), these use an in-memory store
+// instead of chrome.storage so the UI still works in a plain browser tab.
 
 export const isExtensionContext = () =>
   typeof chrome !== "undefined" && !!chrome.storage && !!chrome.storage.local;
 
-/** In-memory fallback store, used only outside the extension context. */
 const memoryStore = new Map();
 const memoryListeners = new Set();
 
@@ -29,10 +25,7 @@ export async function storageSet(key, value) {
   memoryListeners.forEach((fn) => fn(key, value));
 }
 
-/**
- * Subscribes to changes for a single key. Returns an unsubscribe function.
- * Mirrors chrome.storage.onChanged but works in the dev-mode fallback too.
- */
+// Mirrors chrome.storage.onChanged for a single key. Returns an unsubscribe function.
 export function storageSubscribe(key, callback) {
   if (isExtensionContext()) {
     const listener = (changes, area) => {
@@ -51,13 +44,7 @@ export function storageSubscribe(key, callback) {
   return () => memoryListeners.delete(listener);
 }
 
-/**
- * Attempts to close the side panel after the countdown (see project summary
- * §4 step 5 and §8). `chrome.sidePanel.close({ tabId })` only exists from
- * Chrome 141 onward — on older versions this silently does nothing, and the
- * caller should fall back to just leaving the panel in an idle-looking
- * state rather than treating this as a hard failure.
- */
+// chrome.sidePanel.close() requires Chrome 141+. Silently returns false on older versions.
 export async function closeSidePanel() {
   if (!isExtensionContext() || !chrome.sidePanel?.close) {
     console.info("[dev] would close side panel here");
@@ -66,22 +53,15 @@ export async function closeSidePanel() {
   try {
     const window = await chrome.windows.getCurrent();
     if (window?.id == null) return false;
-    // windowId, not tabId: this panel is the global default panel (opened
-    // via openPanelOnActionClick or chrome.sidePanel.open({ windowId })),
-    // not a tab-specific one, so tabId-based close has nothing to match.
     await chrome.sidePanel.close({ windowId: window.id });
     return true;
   } catch (err) {
-    console.warn("chrome.sidePanel.close failed (needs Chrome 141+, and only works if something's actually open):", err);
+    console.warn("chrome.sidePanel.close failed:", err);
     return false;
   }
 }
 
-/**
- * Sends a message to the background service worker. Returns null (rather
- * than throwing) when there's no background to talk to — e.g. during
- * `npm run dev` in a plain tab — so callers can fall back to local state.
- */
+// Returns null instead of throwing when there is no background to talk to.
 export async function sendMessage(message) {
   if (!isExtensionContext() || !chrome.runtime?.sendMessage) {
     console.info("[dev] would message background:", message);
@@ -95,7 +75,6 @@ export async function sendMessage(message) {
   }
 }
 
-/** No-op outside the extension context, so panel components can call this freely. */
 export function createNotification(id, options) {
   if (!isExtensionContext() || !chrome.notifications) {
     console.info("[dev] notification:", id, options);

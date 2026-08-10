@@ -2,9 +2,6 @@ import { useCallback, useEffect, useState } from "react";
 import { storageGet, storageSet, storageSubscribe } from "../lib/chromeApi.js";
 import { DEFAULT_SETTINGS, STORAGE_KEYS } from "../lib/constants.js";
 
-/**
- * Custom React hook for accessing and updating user settings stored in chrome.storage.local.
- */
 export function useSettings() {
   const [settings, setSettingsState] = useState(DEFAULT_SETTINGS);
   const [loaded, setLoaded] = useState(false);

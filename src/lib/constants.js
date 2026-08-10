@@ -1,8 +1,5 @@
-// Central place for every "magic string" the extension uses.
-// Keeping these here means the panel UI, the background worker, and the
-// hooks all agree on the same vocabulary without importing each other.
+// Central constants shared by the panel UI, background worker, and hooks.
 
-/** Visual states the side panel can render. Maps ~1:1 to design states. */
 export const PANEL_STATE = {
   IDLE: "idle",
   PENDING: "pending",
@@ -15,11 +12,7 @@ export const PANEL_STATE = {
   ERROR: "error",
 };
 
-/**
- * Persisted check-in cycle status (see MINDSTREAM_PROJECT_SUMMARY.md §4a).
- * This is the source of truth in chrome.storage.local — the panel UI is a
- * function of this, not the other way around.
- */
+// Persisted in chrome.storage.local. The panel UI is derived from this.
 export const CYCLE_STATUS = {
   IDLE: "idle",
   PENDING: "pending",
@@ -52,9 +45,6 @@ export const MESSAGE_TYPES = {
 
 export const CAPTURE_WINDOW = {
   URL: "src/capture/capture.html",
-  // Portrait, matching the 9:16 reel/film-strip visual language used
-  // everywhere else — the old 480x400 landscape window is what was
-  // cropping the camera preview.
   WIDTH: 440,
   HEIGHT: 720,
 };
@@ -70,22 +60,12 @@ export const NOTIFICATION_IDS = {
   REEL_ERROR: "mindstream-reel-error",
 };
 
-// --- Timings -----------------------------------------------------------
 export const CAPTURE_DURATION_MS = 3000;
 export const COUNTDOWN_SECONDS = 4;
-
-/** How long the user needs to be active before the next pulse prompt. */
 export const PULSE_THRESHOLD_MINUTES = 25;
-
-/**
- * chrome.alarms enforces a practical minimum period of ~1 minute for
- * repeating alarms. Poll at that floor; the backend job usually finishes
- * well under a minute anyway per the latency budget in the project summary.
- */
+// chrome.alarms enforces a minimum repeat period of ~1 minute.
 export const JOB_POLL_INTERVAL_MINUTES = 1;
 
-// --- Backend -------------------------------------------------------------
-// TODO: confirm this against whatever port the local Express server binds.
 export const API_BASE = "http://localhost:4000";
 
 export const API_ROUTES = {
@@ -95,15 +75,10 @@ export const API_ROUTES = {
   HEALTH: `${API_BASE}/health`,
 };
 
-// --- Capture handoff -----------------------------------------------------
-// Subfolder inside the user's default Downloads directory where captured
-// clips are saved.  The friend's AI/ML emotion-detection script watches
-// this folder for new .webm files.
+// Clips are saved to ~/Downloads/mindstream_captures/ via chrome.downloads.
 export const CAPTURE_FOLDER = "mindstream_captures";
 
-// --- Emotion categories ---------------------------------------------------
-// These are the 8 FER+ class labels output directly by the Phase 2 model.
-// They are passed as-is to Phase 3 (reel_generator.py) and to Gemini.
+// 8 FER+ class labels, passed as-is to Phase 3 (reel_generator.py).
 export const EMOTION_CATEGORIES = [
   "angry",
   "contempt",
