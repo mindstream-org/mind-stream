@@ -110,12 +110,7 @@ def _detect_hardware_profile() -> HardwareProfile:
 
     return HardwareProfile(logical_cpus, physical_core_groups)
 
-# ---------------------------------------------------------------------------
-# Speed / resource presets
-#
-# Each preset defines a user experience, not a fixed resource allocation.
-# Render process counts are derived from detected hardware at init time.
-# ---------------------------------------------------------------------------
+# Speed and resource presets
 PRESETS = {
     # Background-friendly. Resource limits are resolved from the CPU topology.
     "normal": {
@@ -263,7 +258,6 @@ def _run_in_cpu_limited_scope(preset: str) -> Optional[int]:
         return None
 
 
-# TODO: ambient audio
 class ReelGenerator:
     """Complete generation pipeline with multi-source video search and ambient audio."""
 
@@ -324,9 +318,7 @@ class ReelGenerator:
             self.output_dir, "render_profile_calibration.json"
         )
 
-        # Ambient audio mapping — one file per FER+ emotion class.
-        # See assets/audio/README.md for generation prompts.
-        # Falls back to neutral.mp3 if a file is missing.
+        # Ambient audio mapping per FER+ emotion class (falls back to neutral.mp3 if missing)
         self.ambient_music = {
             "angry":    "assets/audio/angry.mp3",     # Low rumble, rain on glass
             "contempt": "assets/audio/contempt.mp3",  # Sparse piano, warm pad hum
@@ -363,10 +355,6 @@ class ReelGenerator:
             stop = True
             thread.join(timeout=0.2)
 
-    # -----------------------------------------------------------------------
-    # Step 1 — Script generation
-    # -----------------------------------------------------------------------
-
     def generate_script(self, emotion: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """
         Ask Gemini to return a JSON object with:
@@ -380,16 +368,16 @@ class ReelGenerator:
 
         # Map activity categories to richer, more evocative language for the prompt
         activity_descriptions = {
-            "coding":        "writing code — deep in logic, problem-solving, debugging",
-            "entertainment": "watching videos or streams — passively consuming content",
-            "social_media":  "scrolling through social media — flicking between posts and feeds",
-            "research":      "reading and researching — absorbing information",
-            "shopping":      "browsing products — weighing options, comparing things",
-            "browsing":      "browsing the web — moving from tab to tab",
+            "coding":        "writing code -- deep in logic, problem-solving, debugging",
+            "entertainment": "watching videos or streams -- passively consuming content",
+            "social_media":  "scrolling through social media -- flicking between posts and feeds",
+            "research":      "reading and researching -- absorbing information",
+            "shopping":      "browsing products -- weighing options, comparing things",
+            "browsing":      "browsing the web -- moving from tab to tab",
         }
         activity_desc = activity_descriptions.get(activity, f"working on their computer ({activity})")
 
-        prompt = f"""You are a wise, warm elder — like a grandfather — speaking directly to {user_name} who is currently feeling {emotion}.
+        prompt = f"""You are a wise, warm elder -- like a grandfather -- speaking directly to {user_name} who is currently feeling {emotion}.
 
 Generate a deeply personal, grounding spoken reflection that is 45-60 seconds long when read aloud slowly.
 
@@ -403,11 +391,11 @@ Context you must weave in naturally:
 - Their emotional state: {emotion}
 
 Writing guidelines (follow all of them):
-1. Open by gently saying their name and acknowledging the quality of their attention in this moment — not what they were doing, but HOW they were doing it (pulled in, scattered, absorbed, restless, flowing)
+1. Open by gently saying their name and acknowledging the quality of their attention in this moment -- not what they were doing, but HOW they were doing it (pulled in, scattered, absorbed, restless, flowing)
 2. Use one vivid nature metaphor (river, cloud, tree, candle, tide, light) that mirrors their emotional state: {emotion}
-3. Acknowledge the universal human quality of getting absorbed in screens — validate it without shame
+3. Acknowledge the universal human quality of getting absorbed in screens -- validate it without shame
 4. Give ONE simple physical anchor they can do right now (e.g. "feel the weight of your feet on the floor", "place a palm on your chest", "let your eyes rest on something distant")
-5. End with a gentle permission — to rest, to be imperfect, to simply exist for a moment
+5. End with a gentle permission -- to rest, to be imperfect, to simply exist for a moment
 
 DO NOT:
 - Mention specific websites, domains, or app names
@@ -415,12 +403,12 @@ DO NOT:
 - Use coaching or corporate language
 - List multiple steps or actions
 
-You MUST respond with ONLY a valid JSON object, nothing else — no markdown fences, no explanation:
+You MUST respond with ONLY a valid JSON object, nothing else -- no markdown fences, no explanation:
 {{
   "script": "<the complete spoken text as one continuous string, punctuated for natural speech>",
   "subtitles": [
-    "<phrase 1 — 4 to 6 words>",
-    "<phrase 2 — 4 to 6 words>",
+    "<phrase 1 -- 4 to 6 words>",
+    "<phrase 2 -- 4 to 6 words>",
     "..."
   ]
 }}
@@ -481,9 +469,7 @@ Do not truncate, summarise, or skip any part of the script."""
 
         return {"script": script, "subtitles": subtitles}
 
-    # -----------------------------------------------------------------------
-    # Step 2 — Video keyword extraction
-    # -----------------------------------------------------------------------
+    # Video keyword extraction
 
     def extract_video_keywords(self, script: str, emotion: str, context: Dict[str, Any] = None) -> List[str]:
         """Extract 8-10 cinematic/moody video search terms from the script and context."""
@@ -495,14 +481,14 @@ Do not truncate, summarise, or skip any part of the script."""
 Script:
 {script}{activity_hint}
 
-The video aesthetic must feel: deep, cinematic, moody, trustworthy, grounding — NOT bright, cheerful, or stock-photo generic.
+The video aesthetic must feel: deep, cinematic, moody, trustworthy, grounding -- NOT bright, cheerful, or stock-photo generic.
 Use low-light, dusk, mist, shadows, slow motion, nature, water, fire, sky, or architectural calm as visual themes.
 Vary the terms so each clip looks visually distinct from the others.
 
 Return ONLY a JSON array of 8-10 strings, e.g.:
 ["misty forest at dusk", "soft rain on a window", "dark ocean waves at night", "candle flame slow motion", "fog rolling over mountains", "empty street at night rain", "close up water drops glass", "lone tree misty field"]
 
-No explanation, no markdown — just the raw JSON array."""
+No explanation, no markdown -- just the raw JSON array."""
 
         try:
             if self.script_provider == "groq":
@@ -539,9 +525,7 @@ No explanation, no markdown — just the raw JSON array."""
 
         return []
 
-    # -----------------------------------------------------------------------
-    # Step 3 — Multi-source video search + download
-    # -----------------------------------------------------------------------
+    # Multi-source video search + download
 
     def search_pexels_videos(
         self, keyword: str, orientation: str = "portrait"
@@ -662,7 +646,7 @@ No explanation, no markdown — just the raw JSON array."""
         NO hardcoded fallback keywords - if search fails, generation fails gracefully.
         """
         if not keywords:
-            print("No keywords extracted — cannot download videos")
+            print("No keywords extracted -- cannot download videos")
             return []
 
         def download_single_keyword(i: int, kw: str) -> Optional[str]:
@@ -756,9 +740,7 @@ No explanation, no markdown — just the raw JSON array."""
 
         return paths
 
-    # -----------------------------------------------------------------------
-    # Step 4 — TTS via Xiaomi MiMo API (Dean voice)
-    # -----------------------------------------------------------------------
+    # TTS via Xiaomi MiMo API (Dean voice)
 
     async def _generate_tts_async(self, script: str, output_path: str) -> str:
         loop = asyncio.get_event_loop()
@@ -795,9 +777,7 @@ No explanation, no markdown — just the raw JSON array."""
         asyncio.run(self._generate_tts_async(script, output_path))
         return output_path
 
-    # -----------------------------------------------------------------------
-    # Step 5 — Subtitle SRT generation (Gemini-based, proportional timing)
-    # -----------------------------------------------------------------------
+    # Subtitle SRT generation (Gemini-based, proportional timing)
 
     @staticmethod
     def _srt_ts(seconds: float) -> str:
@@ -860,13 +840,9 @@ No explanation, no markdown — just the raw JSON array."""
 
         return "\n".join(lines)
 
-    # -----------------------------------------------------------------------
-    # Step 6 — Video Compositing
-    # -----------------------------------------------------------------------
+    # Video Compositing
 
-    # -----------------------------------------------------------------------
-    # Step 6 — SRT Parser (Manual subtitle handling for MovieLite)
-    # -----------------------------------------------------------------------
+    # SRT Parser (Manual subtitle handling for MovieLite)
 
     @staticmethod
     def _parse_srt_content(content: str) -> List[Tuple[float, float, str]]:
@@ -1183,7 +1159,7 @@ No explanation, no markdown — just the raw JSON array."""
                     f"  (patched {_patch_count} ffmpeg calls → threads={ffmpeg_threads})"
                 )
             else:
-                print(f"  (WARNING: ffmpeg patch did not fire — threads not limited)")
+                print(f"  (WARNING: ffmpeg patch did not fire -- threads not limited)")
 
     def composite_reel(
         self,
@@ -1226,7 +1202,7 @@ No explanation, no markdown — just the raw JSON array."""
                 )
             )
 
-            # --- Phase 1: Process video clips ---
+            # Process video clips
             # Cap each clip at MAX_CLIP_SECONDS so the reel cuts every few seconds
             # rather than looping the same scene for the entire TTS duration.
             MAX_CLIP_SECONDS = 5.0
@@ -1257,7 +1233,7 @@ No explanation, no markdown — just the raw JSON array."""
 
                 clip.set_duration(clip_dur)
                 clip.set_start(current_time)
-                # Mute the video's own audio track — all audio comes from TTS + ambient
+                # Mute the video's own audio track -- all audio comes from TTS + ambient
                 if clip.audio.has_audio:
                     clip.audio.set_volume(0)
                 current_time += clip_dur
@@ -1266,7 +1242,7 @@ No explanation, no markdown — just the raw JSON array."""
 
             print(f"{self.GREEN}✓{self.RESET} Processing video clips")
 
-            # --- Phase 2: Setup audio ---
+            # Setup audio
             print(f"{self.GREEN}✓{self.RESET} Synchronizing audio")
 
             tts_audio = ml.AudioClip(tts_path)
@@ -1279,7 +1255,7 @@ No explanation, no markdown — just the raw JSON array."""
                 ambient_audio.loop(True)
                 audio_clips.append(ambient_audio)
 
-            # --- Phase 3: Generate subtitles in memory (no disk write) ---
+            # Generate subtitles in memory (no disk write)
             srt_content = self.build_srt(subtitle_list, duration)
             subtitle_entries = self._parse_srt_content(srt_content)
 
@@ -1307,7 +1283,7 @@ No explanation, no markdown — just the raw JSON array."""
                 f"{self.GREEN}✓{self.RESET} Rendering {len(subtitle_clips)} subtitle segments\n"
             )
 
-            # --- Phase 4: Export ---
+            # Export
             self._print_step(5, 5, "Exporting final video")
 
             with self._spinner("Exporting..."):
@@ -1340,9 +1316,7 @@ No explanation, no markdown — just the raw JSON array."""
 
             return output_path
 
-    # -----------------------------------------------------------------------
     # Main pipeline
-    # -----------------------------------------------------------------------
 
     # ANSI color codes
     CYAN = "\033[96m"
@@ -1386,7 +1360,7 @@ No explanation, no markdown — just the raw JSON array."""
         }
 
         try:
-            # Phase 1: Script generation
+            # Script generation
             self._print_step(1, 5, "Generating personalized script")
             provider_name = "Groq" if self.script_provider == "groq" else "Gemini"
             print(f"Provider : {provider_name} ({self.script_model})")
@@ -1402,7 +1376,7 @@ No explanation, no markdown — just the raw JSON array."""
                 f"{self.GREEN}✓{self.RESET} {desc}{self.GREEN}100% |{'━' * 20}| 1/1{self.RESET}\n"
             )
 
-            # Phase 2: Video search
+            # Video search
             self._print_step(2, 5, "Finding supporting visuals")
             print(f"Provider : Pexels")
 
@@ -1423,7 +1397,7 @@ No explanation, no markdown — just the raw JSON array."""
                 raise RuntimeError("No videos could be downloaded")
             print()
 
-            # Phase 3: TTS generation
+            # TTS generation
             self._print_step(3, 5, "Generating narration")
             print(f"Provider : MiMo (Dean)")
 
@@ -1483,9 +1457,7 @@ No explanation, no markdown — just the raw JSON array."""
         return result
 
 
-# ---------------------------------------------------------------------------
 # CLI entry point
-# ---------------------------------------------------------------------------
 
 
 def main() -> int:
@@ -1514,7 +1486,7 @@ def main() -> int:
     if scoped_exit_code is not None:
         return scoped_exit_code
 
-    print("MindStream — Reel Generation\n")
+    print("MindStream -- Reel Generation\n")
 
     try:
         gen = ReelGenerator(
@@ -1541,20 +1513,21 @@ def main() -> int:
             job_id=args.job_id, emotion=args.emotion, context=ctx, header=False, output_filename=args.output_filename
         )
     else:
-        sample = "data/sample_emotion_result.json"
-        if not os.path.exists(sample):
-            print(f"Sample file not found: {sample}", file=sys.stderr)
-            return 1
-        print(f"Input : {sample}")
-        with open(sample) as fh:
-            data = json.load(fh)
+        print("Input : inline sample parameters")
+        sample_job_id = "sample-job-001"
+        sample_emotion = "neutral"
+        sample_context = {
+            "user_name": "User",
+            "active_tab_category": "coding",
+            "time_of_day": "afternoon"
+        }
         print(
-            f"Job   : {data['job_id']} | {data['emotion']['label'].title()} | {data['context'].get('user_name', 'User')}\n"
+            f"Job   : {sample_job_id} | {sample_emotion.title()} | {sample_context.get('user_name', 'User')}\n"
         )
         result = gen.generate_reel(
-            job_id=data["job_id"],
-            emotion=data["emotion"]["label"],
-            context=data["context"],
+            job_id=sample_job_id,
+            emotion=sample_emotion,
+            context=sample_context,
             header=False,
         )
 
