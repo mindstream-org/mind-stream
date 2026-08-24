@@ -14,11 +14,20 @@ Phase 1 captures a 3-second webcam clip from a Chrome extension popup. Phase 2 r
 
 ---
 
+## Data and Privacy
+
+- The raw three-second camera clip is saved locally in `~/Downloads/mindstream_captures/` and analyzed by the local emotion model. The clip itself is not sent to the configured reel providers.
+- To create a reel, the generator sends the selected name, inferred emotion, activity category, and generated script to Gemini or Groq and MiMo. Pexels, Pixabay, or Coverr receive generated visual search terms.
+- MindStream retains camera clips, emotion-result JSON files, generated narration, and finished reels until the user deletes them through **Saved reels** in the extension, which lists every finished reel and removes it (plus its matching clip and emotion result) on demand.
+- The local backend listens on `127.0.0.1:4000`, so it is not exposed to the local network by default.
+
+---
+
 ## How It Works
 
 ```mermaid
 flowchart TD
-    A[Chrome Extension\nSide Panel + Popup] -->|3s WebM + context\nPOST /check-in| B[Express Backend\nlocalhost:4000]
+    A[Chrome Extension\nSide Panel + Popup] -->|3s WebM + context\nPOST /check-in| B[Express Backend\n127.0.0.1:4000]
     B --> C[Phase 2\npredict_emotion.py\nFER+ MobileNetV2]
     C -->|_result.json| B
     B --> D[Phase 3\nreel_generator.py]
