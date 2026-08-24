@@ -5,6 +5,17 @@ import tailwindcss from "@tailwindcss/vite";
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  server: {
+    watch: {
+      ignored: [
+        '**/node_modules/**',
+        '**/backend/venv/**',
+        '**/backend/output/**',
+        '**/backend/__pycache__/**',
+        '**/.git/**',
+      ],
+    },
+  },
   build: {
     outDir: "dist",
     rollupOptions: {
