@@ -1,6 +1,6 @@
 # MindStream Backend
 
-Express server + Python pipeline. Runs locally on port 4000.
+Express server + Python pipeline. Runs on `127.0.0.1:4000`.
 
 ## Pipeline
 
@@ -91,7 +91,9 @@ python predict_emotion.py --clip /path/to/capture.webm
 
 ```
 output/
-├── reels/    # Final MP4s -- served at http://localhost:4000/reels/<filename>
-├── audio/    # TTS files (auto-generated, auto-cleaned)
-└── temp/     # Downloaded stock clips (auto-deleted after compositing)
+├── reels/    # Final MP4s -- served at http://127.0.0.1:4000/reels/<filename>
+├── audio/    # Generated TTS files
+└── temp/     # Downloaded stock clips
 ```
+
+Generated narration and reels remain until the user deletes them. The extension's **Saved reels** view lists every finished reel from `output/reels/`; deleting one removes the reel along with the camera clip and emotion-result JSON captured for it in `~/Downloads/mindstream_captures/`. Temporary stock clips are removed after a successful composition; failed jobs can leave temporary files, which are cleaned up on the next successful run.
