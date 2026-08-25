@@ -57,7 +57,10 @@ for logger_name in ["movielite", "moviepy", "imageio", "urllib3", "google", "htt
 
 import contextlib
 
-load_dotenv()
+# override=True so .env wins over anything inherited from the parent process.
+# server.js reads .env once at boot and passes its process.env to this worker,
+# so without this an edited .env is ignored until the server itself restarts.
+load_dotenv(override=True)
 
 
 @dataclass(frozen=True)
