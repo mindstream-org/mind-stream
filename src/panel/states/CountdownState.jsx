@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef } from "react";
 import Button from "../../components/ui/Button.jsx";
 import { COUNTDOWN_SECONDS } from "../../lib/constants.js";
 
@@ -9,29 +9,29 @@ import { COUNTDOWN_SECONDS } from "../../lib/constants.js";
  * separate bar.
  */
 export default function CountdownState({ onComplete, onProgress }) {
-  const [, setTick] = useState(0); // force re-render for the progress calc
+  // Held in a ref, not the deps: onProgress re-renders the parent 60x a second,
+  // and the new callback identity would restart the interval forever.
+  const callbacks = useRef({ onProgress, onComplete });
+  useEffect(() => {
+    callbacks.current = { onProgress, onComplete };
+  });
 
   useEffect(() => {
     const totalMs = COUNTDOWN_SECONDS * 1000;
     const startTime = Date.now();
 
     const interval = setInterval(() => {
-      const elapsed = Date.now() - startTime;
-      const remaining = Math.max(0, totalMs - elapsed);
-      const progressPercent = (remaining / totalMs) * 100;
-
-      // Push progress up to the parent (PanelShell → PanelHeader)
-      onProgress?.(progressPercent);
-      setTick((t) => t + 1);
+      const remaining = Math.max(0, totalMs - (Date.now() - startTime));
+      callbacks.current.onProgress?.((remaining / totalMs) * 100);
 
       if (remaining <= 0) {
         clearInterval(interval);
-        onComplete?.();
+        callbacks.current.onComplete?.();
       }
-    }, 16); // ~60fps for smooth animation
+    }, 16);
 
     return () => clearInterval(interval);
-  }, [onComplete, onProgress]);
+  }, []);
 
   return (
     <div className="flex flex-col h-full animate-fadein">
