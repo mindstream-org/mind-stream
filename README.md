@@ -1,8 +1,6 @@
 <div align="center">
   <img src="public/assets/logo.png" alt="MindStream" width="120" />
-  
   <h1>MindStream</h1>
-  
   <p>A Chrome extension that reads your expression and generates a short personalized focus-reset reel.<br>Three-second check-in, personalized pipeline.</p>
 </div>
 
@@ -12,8 +10,6 @@ MindStream is a three-phase pipeline built as a college project.
 
 Phase 1 captures a 3-second webcam clip from a Chrome extension popup. Phase 2 runs facial emotion detection using a MobileNetV2 model trained on FER+. Phase 3 generates a personalized 720x1280 reel using an LLM script, stock footage, TTS narration, and ambient audio.
 
----
-
 ## Data and Privacy
 
 - The raw three-second camera clip is saved locally in `~/Downloads/mindstream_captures/` and analyzed by the local emotion model. The clip itself is not sent to the configured reel providers.
@@ -21,26 +17,22 @@ Phase 1 captures a 3-second webcam clip from a Chrome extension popup. Phase 2 r
 - MindStream retains camera clips, emotion-result JSON files, generated narration, and finished reels until the user deletes them through **Saved reels** in the extension, which lists every finished reel and removes it (plus its matching clip and emotion result) on demand.
 - The local backend listens on `127.0.0.1:4000`, so it is not exposed to the local network by default.
 
----
-
 ## How It Works
 
 ```mermaid
 flowchart TD
-    A[Chrome Extension\nSide Panel + Popup] -->|3s WebM + context\nPOST /check-in| B[Express Backend\n127.0.0.1:4000]
-    B --> C[Phase 2\npredict_emotion.py\nFER+ MobileNetV2]
+    A[Chrome Extension<br/>Side Panel + Popup] -->|3s WebM + context<br/>POST /check-in| B[Express Backend<br/>127.0.0.1:4000]
+    B --> C[Phase 2<br/>predict_emotion.py<br/>FER+ MobileNetV2]
     C -->|_result.json| B
-    B --> D[Phase 3\nreel_generator.py]
-    D --> E[Gemini or Groq\nScript + Subtitles]
-    D --> F[Pexels\nStock Clips]
-    D --> G[MiMo TTS\nNarration]
-    E & F & G --> H[MovieLite\n720x1280 MP4]
+    B --> D[Phase 3<br/>reel_generator.py]
+    D --> E[Gemini or Groq<br/>Script + Subtitles]
+    D --> F[Pexels<br/>Stock Clips]
+    D --> G[MiMo TTS<br/>Narration]
+    E & F & G --> H[MovieLite<br/>720x1280 MP4]
     H -->|reel_url| B
     B -->|GET /jobs/:id| A
-    A --> I[Side Panel Player\n+ Notification]
+    A --> I[Side Panel Player<br/>+ Notification]
 ```
-
----
 
 ## Setup
 
@@ -78,27 +70,29 @@ Get keys: [Gemini](https://aistudio.google.com/app/apikey) · [Pexels](https://w
 
 ## Phase 1: Browser Capture
 
-|                  |                                                   |
-| ---------------- | ------------------------------------------------- |
-| **What**         | 3s WebM clip at 640x480, no audio                 |
-| **Where**        | Saved to `~/Downloads/mindstream_captures/`       |
-| **Context sent** | `user_name`, `active_tab_category`, `time_of_day` |
+| Property     | Value                                             |
+| ------------ | ------------------------------------------------- |
+| Clip         | 3s WebM at 640x480, no audio                      |
+| Saved to     | `~/Downloads/mindstream_captures/`                |
+| Context sent | `user_name`, `active_tab_category`, `time_of_day` |
 
 The extension classifies the active tab domain into a category (`coding`, `entertainment`, `social_media`, `research`, `shopping`, `browsing`) and sends it alongside the clip path to the backend.
 
-![Check-in notification](public/assets/check-in-notification.png)
-
-![MindStream side panel idle and check-in screens](public/assets/homepage.png)
+<div align="center">
+  <img src="public/assets/check-in-notification.png" alt="Chrome notification asking for a quick check-in, with Start Check-in, Not Now, and Settings actions" width="420" />
+  <br /><br />
+  <img src="public/assets/homepage.png" alt="MindStream side panel home screen with the Capture, Understand, Reset flow and a Start check-in button" width="280" />
+</div>
 
 ## Phase 2: Emotion Detection
 
-|                   |                                           |
-| ----------------- | ----------------------------------------- |
-| **Task**          | 8-class facial emotion classification     |
-| **Dataset**       | FER+ (66.4K train / 7.3K val / 3.1K test) |
-| **Backbone**      | MobileNetV2 (ImageNet pretrained)         |
-| **Input**         | 128x128x3                                 |
-| **Test Accuracy** | **69.9%** (5.6x random baseline of 12.5%) |
+| Property      | Value                                     |
+| ------------- | ----------------------------------------- |
+| Task          | 8-class facial emotion classification     |
+| Dataset       | FER+ (66.4K train / 7.3K val / 3.1K test) |
+| Backbone      | MobileNetV2 (ImageNet pretrained)         |
+| Input         | 128x128x3                                 |
+| Test accuracy | **69.9%** (5.6x random baseline of 12.5%) |
 
 ### Neural Network Architecture
 
@@ -120,13 +114,18 @@ Training happens in two clean phases, split by the dashed line at **epoch ~11**.
 
 Each matrix's diagonal shows **correct predictions**; the darker the diagonal, the stronger the model. Rows are the true emotion, columns are the predicted one.
 
-#### Validation Set (7,341 images)
-
-![Validation confusion matrix showing strong diagonal concentration](public/assets/confusion_matrix_validation.png)
-
-#### Test Set (3,123 images, held-out unseen data)
-
-![Test confusion matrix showing strong diagonal concentration, especially for happy](public/assets/confusion_matrix_test.png)
+<div align="center">
+  <table>
+    <tr>
+      <td align="center"><b>Validation set</b><br /><sub>7,341 images</sub></td>
+      <td align="center"><b>Test set</b><br /><sub>3,123 images, held out</sub></td>
+    </tr>
+    <tr>
+      <td><img src="public/assets/confusion_matrix_validation.png" alt="Validation confusion matrix showing strong diagonal concentration" width="400" /></td>
+      <td><img src="public/assets/confusion_matrix_test.png" alt="Test confusion matrix showing strong diagonal concentration, especially for happy" width="400" /></td>
+    </tr>
+  </table>
+</div>
 
 **What stands out:**
 
@@ -166,7 +165,7 @@ Missing a genuinely negative emotion matters more in a wellbeing context than co
 3. **Generalizes well**: validation and test confusion matrices show matching diagonal strength, avoiding overfitting
 4. **Efficient by design**: a small, mostly-frozen model that performs well above chance across nearly every class
 
-### How Phase 2 plugs into the pipeline
+### How Phase 2 Plugs into the Pipeline
 
 The model lives at `core_ai/MODELS/CV/best_ferplus_emotion.keras`. When the backend receives a check-in it spawns `predict_emotion.py`:
 
@@ -195,13 +194,13 @@ Gemini or Groq  -->  45-60s script + subtitle phrases
 Gemini or Groq  -->  8-10 cinematic search keywords
       |
       v
-Pexels API                    -->  stock video clips (max 5s each)
+Pexels API      -->  stock video clips (max 5s each)
       |
       v
-MiMo TTS                      -->  MP3 narration
+MiMo TTS        -->  MP3 narration
       |
       v
-MovieLite                     -->  720x1280 MP4 (clips + TTS + ambient audio + subtitles)
+MovieLite       -->  720x1280 MP4 (clips + TTS + ambient audio + subtitles)
 ```
 
 Script is personalized using all three context fields:
@@ -211,8 +210,6 @@ Script is personalized using all three context fields:
 | `user_name`           | Prash   | Addressed directly in narration       |
 | `active_tab_category` | coding  | Shapes the script's emotional framing |
 | `time_of_day`         | evening | Sets tone and pacing                  |
-
----
 
 ## Technology Stack
 
