@@ -32,10 +32,10 @@ npm start
 | `GEMINI_API_KEY` | ✓ (Default) | Script generation (Gemini 2.0 Flash) |
 | `PEXELS_API_KEY` | ✓ | Background video clips |
 | `MIMO_API_KEY` | ✓ | TTS narration (Dean voice) |
-| `GROQ_API_KEY` | optional | Alternative script provider (Llama 3.3 70B) |
+| `GROQ_API_KEY` | optional | Alternative script provider (gpt-oss-120b) |
 | `PIXABAY_API_KEY` | optional | Fallback video source |
 
-By default, MindStream uses Google Gemini for script generation. If you prefer to use Groq, set `SCRIPT_MODEL_PROVIDER=groq` and `SCRIPT_MODEL_NAME=llama-3.3-70b-versatile` in your `.env` and supply `GROQ_API_KEY`.
+By default, MindStream uses Google Gemini for script generation. If you prefer to use Groq, set `SCRIPT_MODEL_PROVIDER=groq` and `SCRIPT_MODEL_NAME=openai/gpt-oss-120b` in your `.env` and supply `GROQ_API_KEY`.
 
 Get keys: [Gemini](https://aistudio.google.com/app/apikey) · [Pexels](https://www.pexels.com/api/) · [MiMo](https://platform.xiaomimimo.com/console/api-keys) · [Groq](https://console.groq.com/keys)
 

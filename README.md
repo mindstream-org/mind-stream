@@ -31,7 +31,7 @@ flowchart TD
     B --> C[Phase 2\npredict_emotion.py\nFER+ MobileNetV2]
     C -->|_result.json| B
     B --> D[Phase 3\nreel_generator.py]
-    D --> E[Gemini or Llama 3.3 via Groq\nScript + Subtitles]
+    D --> E[Gemini or Groq\nScript + Subtitles]
     D --> F[Pexels\nStock Clips]
     D --> G[MiMo TTS\nNarration]
     E & F & G --> H[MovieLite\n720x1280 MP4]
@@ -69,10 +69,10 @@ Load `dist/` as an unpacked extension in Chrome (`chrome://extensions` → Load 
 | `GEMINI_API_KEY`  | ✓ (default provider) | Script generation (Gemini 2.0 Flash)        |
 | `PEXELS_API_KEY`  | ✓                    | Background video clips                      |
 | `MIMO_API_KEY`    | ✓                    | TTS narration                               |
-| `GROQ_API_KEY`    | optional             | Alternative script provider (Llama 3.3 70B) |
+| `GROQ_API_KEY`    | optional             | Alternative script provider (gpt-oss-120b)  |
 | `PIXABAY_API_KEY` | optional             | Fallback video source                       |
 
-By default, MindStream uses Google Gemini for script generation. To switch to Groq, set `SCRIPT_MODEL_PROVIDER=groq` and `SCRIPT_MODEL_NAME=llama-3.3-70b-versatile` in your `.env` and supply a `GROQ_API_KEY`.
+By default, MindStream uses Google Gemini for script generation. To switch to Groq, set `SCRIPT_MODEL_PROVIDER=groq` and `SCRIPT_MODEL_NAME=openai/gpt-oss-120b` in your `.env` and supply a `GROQ_API_KEY`.
 
 Get keys: [Gemini](https://aistudio.google.com/app/apikey) · [Pexels](https://www.pexels.com/api/) · [MiMo](https://platform.xiaomimimo.com/console/api-keys) · [Groq](https://console.groq.com/keys)
 
@@ -189,10 +189,10 @@ Chokidar picks up that file and immediately triggers Phase 3.
 emotion + context
       |
       v
-Gemini or Llama 3.3 via Groq  -->  45-60s script + subtitle phrases
+Gemini or Groq  -->  45-60s script + subtitle phrases
       |
       v
-Gemini or Llama 3.3 via Groq  -->  8-10 cinematic search keywords
+Gemini or Groq  -->  8-10 cinematic search keywords
       |
       v
 Pexels API                    -->  stock video clips (max 5s each)
@@ -222,7 +222,7 @@ Script is personalized using all three context fields:
 | Backend       | Node.js · Express · Chokidar                                |
 | Emotion model | TensorFlow/Keras · MobileNetV2 · FER+ (69.9% test accuracy) |
 | Inference     | PyAV · OpenCV · tf-keras                                    |
-| Script        | Google Gemini or Llama 3.3 via Groq (configurable)          |
+| Script        | Google Gemini or Groq (configurable)                        |
 | TTS           | MiMo API                                                    |
 | Video         | Pexels · MovieLite · Pixabay (fallback)                     |
 
