@@ -66,7 +66,7 @@ export const PULSE_THRESHOLD_MINUTES = 25;
 // chrome.alarms enforces a minimum repeat period of ~1 minute.
 export const JOB_POLL_INTERVAL_MINUTES = 1;
 
-export const API_BASE = "http://localhost:4000";
+const API_BASE = "http://127.0.0.1:4000";
 
 export const API_ROUTES = {
   CHECK_IN: `${API_BASE}/check-in`,

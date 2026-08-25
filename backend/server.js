@@ -116,7 +116,7 @@ function triggerReelGeneration(jobId, emotion, context, preset) {
       jobs[jobId] = {
         ...jobs[jobId],
         status: 'ready',
-        reel_url: `http://localhost:4000/reels/${cleanFilename}`,
+        reel_url: `http://127.0.0.1:${PORT}/reels/${cleanFilename}`,
         emotion_label: emotion,
         completed_at: new Date().toISOString(),
       };
@@ -275,6 +275,6 @@ chokidar.watch(CAPTURE_FOLDER, { ignored: /capture_.*\.webm$/ })
   });
 
 const PORT = 4000;
-app.listen(PORT, () => {
-  console.log(`[server] MindStream backend running on http://localhost:${PORT}`);
+app.listen(PORT, '127.0.0.1', () => {
+  console.log(`[server] MindStream backend running on http://127.0.0.1:${PORT}`);
 });
