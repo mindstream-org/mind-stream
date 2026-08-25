@@ -1,6 +1,6 @@
 """
 MindStream Reel Generator (MovieLite Edition - 4x faster)
-Pipeline: Script (Llama 3.3 70B via Groq / Gemini fallback) → Videos (Pexels/Pixabay/Coverr) → TTS (MiMo Dean) → Subtitles (Manual) → Composite (MovieLite)
+Pipeline: Script (Groq / Gemini fallback) → Videos (Pexels/Pixabay/Coverr) → TTS (MiMo Dean) → Subtitles (Manual) → Composite (MovieLite)
 """
 
 # Suppress tqdm progress bars from MovieLite (must be before imports)
@@ -358,6 +358,46 @@ class ReelGenerator:
             stop = True
             thread.join(timeout=0.2)
 
+    def _groq_chat(
+        self,
+        messages: list,
+        temperature: float,
+        json_mode: bool = False,
+        timeout: int = 30,
+    ) -> str:
+        """POST to Groq's chat API and return the message content.
+
+        Reasoning models (gpt-oss) spend their whole completion budget thinking
+        and return empty content unless the effort is capped -- which surfaces
+        as a 400 json_validate_failed with an empty failed_generation.
+        """
+        payload = {
+            "model": self.script_model,
+            "messages": messages,
+            "temperature": temperature,
+        }
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
+        if "gpt-oss" in self.script_model:
+            payload["reasoning_effort"] = "low"
+
+        response = self._http.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {self.groq_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=timeout,
+        )
+        # Groq returns the useful detail (decommissioned model, bad JSON) in the
+        # body, which raise_for_status() throws away.
+        if not response.ok:
+            raise RuntimeError(
+                f"Groq {response.status_code} for {self.script_model}: {response.text[:300]}"
+            )
+        return response.json()["choices"][0]["message"]["content"]
+
     def generate_script(self, emotion: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """
         Ask Gemini to return a JSON object with:
@@ -422,28 +462,17 @@ Do not truncate, summarise, or skip any part of the script."""
 
         # Call the appropriate LLM based on provider
         if self.script_provider == "groq":
-            response = self._http.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.groq_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": self.script_model,
-                    "messages": [
-                        {
-                            "role": "system",
-                            "content": "You are a wise, warm elder who creates mindfulness scripts in JSON format.",
-                        },
-                        {"role": "user", "content": prompt},
-                    ],
-                    "temperature": 0.8,
-                    "response_format": {"type": "json_object"},
-                },
-                timeout=30,
+            raw = self._groq_chat(
+                [
+                    {
+                        "role": "system",
+                        "content": "You are a wise, warm elder who creates mindfulness scripts in JSON format.",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.8,
+                json_mode=True,
             )
-            response.raise_for_status()
-            raw = response.json()["choices"][0]["message"]["content"]
         else:
             response = self.client.models.generate_content(
                 model=self.script_model, contents=prompt, config={"temperature": 0.9}
@@ -495,21 +524,11 @@ No explanation, no markdown -- just the raw JSON array."""
 
         try:
             if self.script_provider == "groq":
-                response = self._http.post(
-                    "https://api.groq.com/openai/v1/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {self.groq_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "model": self.script_model,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "temperature": 0.7,
-                    },
+                text = self._groq_chat(
+                    [{"role": "user", "content": prompt}],
+                    temperature=0.7,
                     timeout=20,
                 )
-                response.raise_for_status()
-                text = response.json()["choices"][0]["message"]["content"]
             else:
                 response = self.client.models.generate_content(
                     model=self.script_model,
