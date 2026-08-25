@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback } from "react";
 import { Gauge, Zap, RefreshCw } from "lucide-react";
-import { MotionConfig, motion, AnimatePresence } from "motion/react";
+import { motion } from "motion/react";
 import Button from "../../components/ui/Button.jsx";
 import Logo from "../../components/ui/Logo.jsx";
-import { GENERATION_PRESETS, API_ROUTES } from "../../lib/constants.js";
+import { GENERATION_PRESETS, API_ROUTES, LOGO_MORPH } from "../../lib/constants.js";
 
 const TOTAL_STEPS = 4;
 
@@ -43,14 +43,20 @@ const OPTIONAL_KEYS = [
   },
 ];
 
+const fetchKeyStatus = () =>
+  fetch(API_ROUTES.HEALTH, { signal: AbortSignal.timeout(3000) })
+    .then((r) => r.json())
+    .then((data) => ({ keys: data.keys ?? {}, reachable: true }))
+    .catch(() => ({ keys: {}, reachable: false }));
+
 export default function OnboardingState({
   settings,
   updateSettings,
   onComplete,
-  onStepChange,
+  step,
+  setStep,
 }) {
-  const [step, setStep] = useState(1);
-  const [prevStep, setPrevStep] = useState(1);
+  const [cameFromWelcome, setCameFromWelcome] = useState(false);
   const [name, setName] = useState(
     settings?.user_name && settings.user_name !== "friend"
       ? settings.user_name
@@ -63,47 +69,22 @@ export default function OnboardingState({
   const [backendReachable, setBackendReachable] = useState(null);
   const [checking, setChecking] = useState(false);
 
-  // Notify parent of step changes for header animation
-  useEffect(() => {
-    onStepChange?.(step);
-  }, [step, onStepChange]);
-
-  // Check backend health and key status
-  const checkBackend = useCallback(() => {
+  const checkBackend = useCallback(async () => {
     setChecking(true);
     const startedAt = Date.now();
-
-    return fetch(API_ROUTES.HEALTH, { signal: AbortSignal.timeout(3000) })
-      .then((r) => r.json())
-      .then((data) => {
-        setKeyStatus(data.keys ?? {});
-        setBackendReachable(true);
-      })
-      .catch(() => {
-        setKeyStatus({});
-        setBackendReachable(false);
-      })
-      .finally(() => {
-        const elapsed = Date.now() - startedAt;
-        const remaining = Math.max(0, 500 - elapsed);
-        setTimeout(() => setChecking(false), remaining);
-      });
+    const { keys, reachable } = await fetchKeyStatus();
+    setKeyStatus(keys);
+    setBackendReachable(reachable);
+    setTimeout(() => setChecking(false), Math.max(0, 500 - (Date.now() - startedAt)));
   }, []);
 
   useEffect(() => {
     let active = true;
-    fetch(API_ROUTES.HEALTH, { signal: AbortSignal.timeout(3000) })
-      .then((r) => r.json())
-      .then((data) => {
-        if (!active) return;
-        setKeyStatus(data.keys ?? {});
-        setBackendReachable(true);
-      })
-      .catch(() => {
-        if (!active) return;
-        setKeyStatus({});
-        setBackendReachable(false);
-      });
+    fetchKeyStatus().then(({ keys, reachable }) => {
+      if (!active) return;
+      setKeyStatus(keys);
+      setBackendReachable(reachable);
+    });
     return () => {
       active = false;
     };
@@ -120,8 +101,14 @@ export default function OnboardingState({
       : backendReachable === false || missingRequired.length > 0;
   const visibleSteps = needsConfigStep ? TOTAL_STEPS : TOTAL_STEPS - 1;
 
-  const goNext = () => setStep((s) => { setPrevStep(s); return s + 1; });
-  const goBack = () => setStep((s) => { setPrevStep(s); return s - 1; });
+  const goNext = () => {
+    setCameFromWelcome(step === 1);
+    setStep(step + 1);
+  };
+  const goBack = () => {
+    setCameFromWelcome(false);
+    setStep(step - 1);
+  };
 
   const saveNameAndNext = () => {
     updateSettings({ user_name: name.trim() || "friend" });
@@ -154,135 +141,101 @@ export default function OnboardingState({
     }
   }, [step, needsConfigStep, backendReachable, finish]);
 
-  const isComingFromStep1 = prevStep === 1 && step === 2;
-
   return (
-    <MotionConfig transition={{ duration: 0.75, ease: [0.25, 0.1, 0.25, 1] }}>
-      <div className="flex flex-col h-full max-w-xs">
-        {/* Step progress bar */}
-        <div className="flex items-center gap-1.5 mb-6 shrink-0">
-          {Array.from({ length: visibleSteps }).map((_, i) => {
-            const stepNum = i + 1;
-            const isActive = stepNum === step;
-            const isCompleted = stepNum < step;
-            return (
-              <div
-                key={i}
-                className={`h-0.5 flex-1 rounded-full transition-all duration-300 ${
-                  isActive
-                    ? "bg-fg"
-                    : isCompleted
-                      ? "bg-fg-subtle"
-                      : "bg-border"
-                }`}
-              />
-            );
-          })}
-        </div>
-
-        <AnimatePresence mode="wait">
-          <div key={step} className="flex-1 relative overflow-hidden">
-            {step === 1 ? (
-              <StepWelcome onNext={goNext} showLogo={true} />
-            ) : step === 2 ? (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{
-                  delay: isComingFromStep1 ? 0.6 : 0,
-                  duration: 0.3,
-                }}
-                className="h-full"
-              >
-                <StepPersonalise
-                  name={name}
-                  setName={setName}
-                  onNext={saveNameAndNext}
-                  onBack={goBack}
-                />
-              </motion.div>
-            ) : step === 3 ? (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{ duration: 0.3 }}
-                className="h-full"
-              >
-                <StepPreferences
-                  preset={preset}
-                  setPreset={setPreset}
-                  onNext={savePresetAndNext}
-                  onBack={goBack}
-                  skipBackend={!needsConfigStep}
-                />
-              </motion.div>
-            ) : step === 4 && needsConfigStep ? (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{ duration: 0.3 }}
-                className="h-full"
-              >
-                <StepBackend
-                  backendReachable={backendReachable}
-                  keyStatus={keyStatus}
-                  missingRequired={missingRequired}
-                  checking={checking}
-                  onRecheck={checkBackend}
-                  onFinish={finish}
-                  onBack={goBack}
-                />
-              </motion.div>
-            ) : null}
-          </div>
-        </AnimatePresence>
+    <div className="flex flex-col h-full max-w-xs">
+      <div className="flex items-center gap-1.5 mb-6 shrink-0">
+        {Array.from({ length: visibleSteps }).map((_, i) => {
+          const stepNum = i + 1;
+          const isActive = stepNum === step;
+          const isCompleted = stepNum < step;
+          return (
+            <div
+              key={i}
+              className={`h-0.5 flex-1 rounded-full transition-all duration-300 ${
+                isActive
+                  ? "bg-fg"
+                  : isCompleted
+                    ? "bg-fg-subtle"
+                    : "bg-border"
+              }`}
+            />
+          );
+        })}
       </div>
-    </MotionConfig>
+
+      <div key={step} className="flex-1 relative">
+        {step === 1 ? (
+          <StepWelcome onNext={goNext} />
+        ) : step === 2 ? (
+          <motion.div
+            className="h-full"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{
+              delay: cameFromWelcome ? LOGO_MORPH.duration : 0,
+              duration: 0.25,
+            }}
+          >
+            <StepPersonalise
+              name={name}
+              setName={setName}
+              onNext={saveNameAndNext}
+              onBack={goBack}
+            />
+          </motion.div>
+        ) : step === 3 ? (
+          <StepPreferences
+            preset={preset}
+            setPreset={setPreset}
+            onNext={savePresetAndNext}
+            onBack={goBack}
+            skipBackend={!needsConfigStep}
+          />
+        ) : step === 4 && needsConfigStep ? (
+          <StepBackend
+            backendReachable={backendReachable}
+            keyStatus={keyStatus}
+            missingRequired={missingRequired}
+            checking={checking}
+            onRecheck={checkBackend}
+            onFinish={finish}
+            onBack={goBack}
+          />
+        ) : null}
+      </div>
+    </div>
   );
 }
 
-function StepWelcome({ onNext, showLogo = true }) {
+function StepWelcome({ onNext }) {
   return (
-    <div className="flex h-full flex-col animate-fadein">
+    <motion.div
+      className="flex h-full flex-col"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.6, ease: "easeOut" }}
+    >
       <div className="flex-1 flex flex-col justify-center">
         <div className="flex justify-center mb-8">
-          {showLogo && <Logo size="medium" />}
+          <Logo size="medium" layoutId="onboarding-logo" />
         </div>
 
-        <div className="space-y-3">
-          <h1 className="text-[30px] font-semibold tracking-[-0.04em] leading-tight">
-            Reset your focus,
-            <br />
-            <span className="text-fg-muted">gracefully.</span>
-          </h1>
+        <h1 className="text-[30px] font-semibold tracking-[-0.04em] leading-tight">
+          Reset your focus,
+          <br />
+          <span className="text-fg-muted">gracefully.</span>
+        </h1>
 
-          <p className="max-w-[300px] text-sm leading-6 text-fg-muted">
-            A quick check-in becomes a personalized reflection reel while you
-            continue your work.
-          </p>
-        </div>
-
-        <div className="mt-10 space-y-4">
-          {[
-            "Private by default",
-            "Runs locally",
-            "Notifies you when ready",
-          ].map((item) => (
-            <div
-              key={item}
-              className="flex items-center gap-3 text-sm text-fg-muted"
-            >
-              <div className="h-1.5 w-1.5 rounded-full bg-primary shrink-0" />
-              <span>{item}</span>
-            </div>
-          ))}
-        </div>
+        <p className="mt-3 max-w-[300px] text-sm leading-6 text-fg-muted">
+          A three-second check-in becomes a personalized focus reset while you
+          keep working.
+        </p>
       </div>
 
       <Button variant="primary" className="w-full h-11" onClick={onNext}>
-        Get Started
+        Get started
       </Button>
-    </div>
+    </motion.div>
   );
 }
 
@@ -290,7 +243,7 @@ function StepPersonalise({ name, setName, onNext, onBack }) {
   const hasName = name.trim().length > 0;
 
   return (
-    <div className="flex flex-col h-full animate-fadein">
+    <div className="flex flex-col h-full">
       <h1 className="text-[20px] font-semibold leading-snug tracking-[-0.025em] mb-1.5">
         What should we call you?
       </h1>
@@ -367,13 +320,12 @@ function StepPreferences({ preset, setPreset, onNext, onBack, skipBackend }) {
 
 function PresetCard({ selected, onClick, title, Icon, description }) {
   return (
-    <div
+    <button
+      type="button"
       onClick={onClick}
       role="radio"
       aria-checked={selected}
-      tabIndex={0}
-      onKeyDown={(e) => (e.key === " " || e.key === "Enter") && onClick()}
-      className={`p-4 rounded-[10px] border cursor-pointer transition-all select-none outline-none focus-visible:ring-1 focus-visible:ring-fg/20 ${
+      className={`w-full p-4 rounded-[10px] border cursor-pointer text-left transition-all select-none ${
         selected
           ? "border-fg-subtle bg-surface-raised"
           : "border-border bg-surface hover:border-fg-subtle/40"
@@ -399,7 +351,7 @@ function PresetCard({ selected, onClick, title, Icon, description }) {
       <p className="text-[12px] text-fg-subtle leading-relaxed">
         {description}
       </p>
-    </div>
+    </button>
   );
 }
 

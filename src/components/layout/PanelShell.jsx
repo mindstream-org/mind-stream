@@ -13,7 +13,7 @@ export default function PanelShell({ state, progress, headerProps, children }) {
 
   return (
     <div className="w-full h-screen bg-bg flex flex-col text-fg font-sans">
-      <PanelHeader state={state} progress={progress} {...headerProps} />
+      <PanelHeader progress={progress} {...headerProps} />
       <div className="flex-1 px-5 pb-6 flex flex-col">
         {children}
       </div>

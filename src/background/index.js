@@ -1,5 +1,6 @@
 import {
   ALARM_NAMES,
+  BACKEND_UNREACHABLE,
   CYCLE_STATUS,
   MESSAGE_TYPES,
   NOTIFICATION_IDS,
@@ -39,11 +40,12 @@ async function setCycle(patch) {
   return next;
 }
 
-async function openSidePanel() {
-  const window = await chrome.windows.getCurrent();
-  if (window?.id != null) {
-    await chrome.sidePanel.open({ windowId: window.id });
-  }
+// WINDOW_ID_CURRENT resolves browser-side: awaiting windows.getCurrent() first
+// spends the caller's user gesture, and Chrome then rejects the open().
+function openSidePanel() {
+  return chrome.sidePanel
+    .open({ windowId: chrome.windows.WINDOW_ID_CURRENT })
+    .catch((error) => console.warn("[background] sidePanel.open failed:", error.message));
 }
 
 async function windowStillExists(windowId) {
@@ -231,23 +233,25 @@ getCycle().then((cycle) => {
   }
 });
 
-chrome.notifications.onClicked.addListener(async (notificationId) => {
-  chrome.notifications.clear(notificationId);
-  if (notificationId === NOTIFICATION_IDS.PULSE_PROMPT) {
-    await startCheckInCycle();
-  } else if (notificationId === NOTIFICATION_IDS.REEL_READY || notificationId === NOTIFICATION_IDS.REEL_ERROR) {
-    await openSidePanel();
-  }
-});
+async function handleNotificationAction(notificationId, isPrimary) {
+  const opensPanel = isPrimary && notificationId !== NOTIFICATION_IDS.PULSE_PROMPT;
+  // Before the first await, while the user gesture is still live.
+  if (opensPanel) openSidePanel();
 
-chrome.notifications.onButtonClicked.addListener(async (notificationId, buttonIndex) => {
   chrome.notifications.clear(notificationId);
-  if (notificationId === NOTIFICATION_IDS.PULSE_PROMPT && buttonIndex === 0) {
+
+  if (isPrimary && notificationId === NOTIFICATION_IDS.PULSE_PROMPT) {
     await startCheckInCycle();
-  } else if (notificationId === NOTIFICATION_IDS.REEL_READY && buttonIndex === 0) {
-    await openSidePanel();
   }
-});
+}
+
+chrome.notifications.onClicked.addListener((notificationId) =>
+  handleNotificationAction(notificationId, true)
+);
+
+chrome.notifications.onButtonClicked.addListener((notificationId, buttonIndex) =>
+  handleNotificationAction(notificationId, buttonIndex === 0)
+);
 
 // Classifies the active tab domain into a broad activity category.
 async function getActiveTabInfo() {
@@ -325,16 +329,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
         await setCycle({ clip_path: message.clipPath, job_id: data.job_id });
         pollActiveJob();
+        sendResponse({ ok: true });
       } catch (err) {
         console.error("[background] Check-in failed:", err);
         await setCycle({
           cycle_status: CYCLE_STATUS.FAILED,
-          error_message: "Could not connect to the local server on port 4000. Run 'npm start' in the backend directory.",
+          error_message: BACKEND_UNREACHABLE,
         });
+        sendResponse({ ok: false, error: BACKEND_UNREACHABLE });
       }
     });
 
-    sendResponse({ ok: true });
     return true;
   }
 });

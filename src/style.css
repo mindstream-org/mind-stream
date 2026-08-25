@@ -23,22 +23,19 @@
   --color-primary:        #ffffff;
   --color-primary-fg:     #09090b;
 
-  /* Status — used sparingly, only for error/warning callouts */
   --color-destructive:    #f87171;   /* red-400 */
-  --color-warning:        #fbbf24;   /* amber-400 */
 
   /* Typography */
   --font-sans: "Inter", system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, monospace;
 
   /* Animations */
-  --animate-breathe: breathe 3.2s ease-in-out infinite;
   --animate-fadein:  fadein 0.25s ease;
-}
-
-@keyframes breathe {
-  0%, 100% { transform: scale(1);   opacity: 0.4; }
-  50%       { transform: scale(1.6); opacity: 1;   }
+  --animate-shimmer: shimmer-slide 1.8s linear infinite;
+  --animate-breathe: breathe 3.6s ease-in-out infinite;
+  --animate-gaze:    gaze 5.4s ease-in-out infinite;
+  --animate-blink:   blink 5.4s ease-in-out infinite;
+  --animate-smile:   smile-in 0.5s 0.15s ease-out both;
 }
 
 @keyframes fadein {
@@ -46,32 +43,55 @@
   to   { opacity: 1; transform: none; }
 }
 
-
-
-/* Idle page shimmer text */
 @keyframes shimmer-slide {
   0%   { background-position: -200% center; }
   100% { background-position:  200% center; }
 }
 
-.text-shimmer {
-  background: linear-gradient(
-    90deg,
-    var(--color-fg-subtle) 0%,
-    var(--color-fg-muted)  40%,
-    var(--color-fg)        50%,
-    var(--color-fg-muted)  60%,
-    var(--color-fg-subtle) 100%
-  );
-  background-size: 200% auto;
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  animation: shimmer-slide 4s linear infinite;
+@keyframes breathe {
+  0%, 100% { opacity: 0.12; transform: scale(0.9); }
+  50%      { opacity: 0.55; transform: scale(1); }
 }
 
+@keyframes gaze {
+  0%,  12%  { transform: translateX(0); }
+  28%, 44%  { transform: translateX(4px); }
+  60%, 76%  { transform: translateX(-4px); }
+  92%, 100% { transform: translateX(0); }
+}
+
+@keyframes blink {
+  0%, 86%, 92%, 100% { transform: scaleY(1); }
+  89%                { transform: scaleY(0.08); }
+}
+
+@keyframes smile-in {
+  from { stroke-dashoffset: 1; }
+  to   { stroke-dashoffset: 0; }
+}
+
+/* Without this the browser's white base layer flashes before the panel paints. */
 html,
 body,
 #root {
   height: 100%;
+  background-color: var(--color-bg);
+}
+
+button:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--color-fg-muted);
+  outline-offset: 2px;
+}
+
+/* data-ambient is exempt: it is the only signal that work is still running.
+   Transitions are left alone; killing them makes controls feel broken. */
+@media (prefers-reduced-motion: reduce) {
+  *:not([data-ambient], [data-ambient] *),
+  *:not([data-ambient], [data-ambient] *)::before,
+  *:not([data-ambient], [data-ambient] *)::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
 }

@@ -1,11 +1,6 @@
 import { useEffect, useState } from "react";
 import { CAPTURE_DURATION_MS } from "../../lib/constants.js";
 
-/**
- * `videoRef` is provided by useCameraCapture() in the parent -- this
- * component is purely presentational so it can also be exercised in
- * isolation (e.g. Storybook-style preview) without a real camera.
- */
 export default function CaptureState({ videoRef, durationMs = CAPTURE_DURATION_MS }) {
   const [secondsLeft, setSecondsLeft] = useState(() => Math.ceil(durationMs / 1000));
 
@@ -18,29 +13,25 @@ export default function CaptureState({ videoRef, durationMs = CAPTURE_DURATION_M
 
   return (
     <div className="flex flex-col h-full animate-fadein">
-      <div className="font-mono text-[10.5px] tracking-[0.14em] uppercase text-coral mb-2 flex items-center gap-2">
-        <div className="w-1.5 h-1.5 rounded-full bg-coral animate-blink" />
+      <div className="font-mono text-[10.5px] tracking-[0.14em] uppercase text-destructive mb-2 flex items-center gap-2">
+        <div className="w-1.5 h-1.5 rounded-full bg-destructive animate-pulse" />
         Recording
       </div>
       <h1 className="text-[21px] font-bold leading-tight mb-3 tracking-[-0.02em]">
-        Hold still for a second.
+        Hold still.
       </h1>
 
-      <div className="w-full flex-1 min-h-0 rounded-[14px] border border-teal shadow-[0_0_0_4px_var(--color-teal-soft)] relative mb-4 flex items-center justify-center overflow-hidden bg-[#12161A]">
+      <div className="w-full flex-1 min-h-0 rounded-[14px] border border-border relative flex items-center justify-center overflow-hidden bg-surface">
         <video
           ref={videoRef}
           muted
           playsInline
-          className="absolute inset-0 w-full h-full object-cover transform-[scaleX(-1)]"
+          className="absolute inset-0 w-full h-full object-cover [transform:scaleX(-1)]"
         />
         <div className="absolute top-3 left-3 flex items-center gap-1.5 bg-black/50 backdrop-blur-sm border border-white/10 px-2.5 py-1 rounded-full font-mono text-[11px] text-white tracking-wide z-10">
           0:0{secondsLeft}
         </div>
       </div>
-
-      <p className="text-[13px] leading-relaxed text-fog shrink-0">
-        This stays on your device. Nothing is uploaded anywhere.
-      </p>
     </div>
   );
 }

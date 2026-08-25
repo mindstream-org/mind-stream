@@ -32,7 +32,7 @@ export const GENERATION_PRESETS = {
 
 export const DEFAULT_SETTINGS = {
   preset: GENERATION_PRESETS.NORMAL,
-  user_name: "Friend",
+  user_name: "friend",
   onboarding_complete: false,
 };
 
@@ -62,30 +62,35 @@ export const NOTIFICATION_IDS = {
 
 export const CAPTURE_DURATION_MS = 3000;
 export const COUNTDOWN_SECONDS = 4;
+export const LOGO_MORPH = { duration: 0.3, ease: "easeOut" };
 export const PULSE_THRESHOLD_MINUTES = 25;
 // chrome.alarms enforces a minimum repeat period of ~1 minute.
 export const JOB_POLL_INTERVAL_MINUTES = 1;
 
-export const API_BASE = "http://localhost:4000";
+const API_BASE = "http://127.0.0.1:4000";
 
 export const API_ROUTES = {
   CHECK_IN: `${API_BASE}/check-in`,
   JOB_STATUS: (jobId) => `${API_BASE}/jobs/${jobId}`,
   CANCEL_JOB: (jobId) => `${API_BASE}/jobs/${jobId}/cancel`,
+  SAVED_REELS: `${API_BASE}/saved-data/reels`,
+  SAVED_REEL: (filename) => `${API_BASE}/saved-data/reels/${encodeURIComponent(filename)}`,
   HEALTH: `${API_BASE}/health`,
 };
+
+export const BACKEND_UNREACHABLE =
+  "Can't reach the local server on port 4000. Start it with 'npm start' in the backend folder, then try again.";
 
 // Clips are saved to ~/Downloads/mindstream_captures/ via chrome.downloads.
 export const CAPTURE_FOLDER = "mindstream_captures";
 
-// 8 FER+ class labels, passed as-is to Phase 3 (reel_generator.py).
-export const EMOTION_CATEGORIES = [
-  "angry",
-  "contempt",
-  "disgust",
-  "fear",
-  "happy",
-  "neutral",
-  "sad",
-  "surprise",
-];
+export const EMOTION_TONE = {
+  happy: "Uplifting",
+  sad: "Calming",
+  angry: "Grounding",
+  fear: "Soothing",
+  disgust: "Resetting",
+  surprise: "Centering",
+  neutral: "Balancing",
+  contempt: "Reframing",
+};

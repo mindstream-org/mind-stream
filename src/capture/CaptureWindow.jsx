@@ -8,7 +8,7 @@ import Button from "../components/ui/Button.jsx";
 import { useCameraCapture } from "../hooks/useCameraCapture.js";
 import { saveCapture } from "../lib/checkIn.js";
 import { sendMessage } from "../lib/chromeApi.js";
-import { MESSAGE_TYPES, PANEL_STATE } from "../lib/constants.js";
+import { MESSAGE_TYPES, PANEL_STATE, API_ROUTES, BACKEND_UNREACHABLE } from "../lib/constants.js";
 
 /**
  * Popup window that owns the webcam capture flow.
@@ -19,9 +19,8 @@ import { MESSAGE_TYPES, PANEL_STATE } from "../lib/constants.js";
 export default function CaptureWindow() {
   const camera = useCameraCapture();
   const startedRef = useRef(false);
-  const [confirmed, setConfirmed] = useState(false);
+  const [submit, setSubmit] = useState(null);
   const [countdownProgress, setCountdownProgress] = useState(null);
-  const savePromiseRef = useRef(null);
   useEffect(() => {
     if (!startedRef.current) {
       startedRef.current = true;
@@ -47,14 +46,27 @@ export default function CaptureWindow() {
   }, [camera.phase]);
 
   const handleAccept = async () => {
-    setConfirmed(true);
+    setSubmit({ status: "sending" });
     camera.stopStream();
-    savePromiseRef.current = (async () => {
-      const clipPath = await saveCapture(camera.blob);
-      if (clipPath) {
-        await sendMessage({ type: MESSAGE_TYPES.CLIP_SAVED, clipPath });
-      }
-    })();
+
+    const clipPath = await saveCapture(camera.blob);
+    if (!clipPath) {
+      setSubmit({ status: "failed", error: "The clip couldn't be saved to your downloads folder." });
+      return;
+    }
+
+    let result = await sendMessage({ type: MESSAGE_TYPES.CLIP_SAVED, clipPath });
+    if (!result) {
+      result = await fetch(API_ROUTES.HEALTH, { signal: AbortSignal.timeout(3000) })
+        .then((r) => ({ ok: r.ok }))
+        .catch(() => ({ ok: false }));
+    }
+
+    setSubmit(
+      result.ok
+        ? { status: "started" }
+        : { status: "failed", error: result.error ?? BACKEND_UNREACHABLE },
+    );
   };
 
   const handleDecline = async () => {
@@ -63,16 +75,10 @@ export default function CaptureWindow() {
     window.close();
   };
 
-  const handleCountdownComplete = async () => {
-    camera.stopStream();
-    if (savePromiseRef.current) await savePromiseRef.current;
-    window.close();
-  };
-
   let panelState = PANEL_STATE.SKELETON;
   if (camera.phase === "recording") panelState = PANEL_STATE.CAPTURE;
-  else if (camera.phase === "done" && !confirmed) panelState = PANEL_STATE.CONFIRM;
-  else if (camera.phase === "done" && confirmed) panelState = PANEL_STATE.COUNTDOWN;
+  else if (camera.phase === "done" && !submit) panelState = PANEL_STATE.CONFIRM;
+  else if (camera.phase === "done" && submit) panelState = PANEL_STATE.COUNTDOWN;
   else if (camera.phase === "error") panelState = PANEL_STATE.ERROR;
 
   return (
@@ -83,7 +89,12 @@ export default function CaptureWindow() {
         <ConfirmState blobUrl={camera.blobUrl} onAccept={handleAccept} onDecline={handleDecline} />
       )}
       {panelState === PANEL_STATE.COUNTDOWN && (
-        <CountdownState onComplete={handleCountdownComplete} onProgress={setCountdownProgress} />
+        <CountdownState
+          status={submit.status}
+          error={submit.error}
+          onProgress={setCountdownProgress}
+          onDone={() => window.close()}
+        />
       )}
       {panelState === PANEL_STATE.ERROR && (
         <div className="flex flex-col animate-fadein">
