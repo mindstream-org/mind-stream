@@ -76,6 +76,9 @@ export const API_ROUTES = {
   HEALTH: `${API_BASE}/health`,
 };
 
+export const BACKEND_UNREACHABLE =
+  "Can't reach the local server on port 4000. Start it with 'npm start' in the backend folder, then try again.";
+
 // Clips are saved to ~/Downloads/mindstream_captures/ via chrome.downloads.
 export const CAPTURE_FOLDER = "mindstream_captures";
 
