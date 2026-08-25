@@ -37,6 +37,7 @@ if (!['normal', 'fast'].includes(REEL_PRESET)) {
 const pendingResults = {};
 
 const CAPTURE_FOLDER = path.join(os.homedir(), 'Downloads', 'mindstream_captures');
+const REEL_FOLDER = path.join(__dirname, 'output', 'reels');
 console.log(`[server] Monitoring captures folder: ${CAPTURE_FOLDER}`);
 
 try {
@@ -63,11 +64,94 @@ function cancelJob(jobId, reason = 'Job cancelled') {
   if (activeJobId === jobId) activeJobId = null;
 }
 
+function reelTimestamp(filename) {
+  const match = filename.match(/^mindstream_(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})_/);
+  if (!match) return null;
+  const [, y, m, d, hh, mm, ss] = match;
+  return new Date(y, m - 1, d, hh, mm, ss).getTime();
+}
+
+function listReels() {
+  let entries;
+
+  try {
+    entries = fs.readdirSync(REEL_FOLDER, { withFileTypes: true });
+  } catch (error) {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  }
+
+  return entries
+    .filter((entry) => entry.isFile() && /^mindstream_.+\.mp4$/.test(entry.name))
+    .map((entry) => {
+      const timestamp = reelTimestamp(entry.name);
+      const emotionMatch = entry.name.match(/_([a-z]+)\.mp4$/);
+
+      return {
+        filename: entry.name,
+        emotion: emotionMatch ? emotionMatch[1] : 'neutral',
+        created_at: timestamp ? new Date(timestamp).toISOString() : null,
+        url: `http://127.0.0.1:${PORT}/reels/${encodeURIComponent(entry.name)}`,
+      };
+    })
+    .sort((a, b) => String(b.created_at ?? '').localeCompare(String(a.created_at ?? '')));
+}
+
+function clipTimestamp(filename) {
+  const match = filename.match(/^capture_(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})/);
+  if (!match) return null;
+  const [, date, hh, mm, ss] = match;
+  return new Date(`${date}T${hh}:${mm}:${ss}Z`).getTime();
+}
+
+// Clips precede generation, so the reel's own timestamp finds its clip: nearest
+// match inside a window wide enough to allow for generation time.
+function deleteReel(filename) {
+  const reelPath = path.join(REEL_FOLDER, path.basename(filename));
+  let deleted = 0;
+  let failed = 0;
+
+  try {
+    fs.unlinkSync(reelPath);
+    deleted += 1;
+  } catch (error) {
+    if (error.code === 'ENOENT') return { deleted: 0, failed: 0, reel: false };
+    failed += 1;
+  }
+
+  const reelTime = reelTimestamp(filename);
+  if (reelTime != null) {
+    let clipEntries = [];
+    try {
+      clipEntries = fs.readdirSync(CAPTURE_FOLDER, { withFileTypes: true });
+    } catch { /* no captures folder yet */ }
+
+    const closest = clipEntries
+      .filter((entry) => entry.isFile())
+      .map((entry) => ({ name: entry.name, time: clipTimestamp(entry.name) }))
+      .filter((entry) => entry.time != null && Math.abs(entry.time - reelTime) <= 15 * 60 * 1000)
+      .sort((a, b) => Math.abs(a.time - reelTime) - Math.abs(b.time - reelTime))[0];
+
+    if (closest) {
+      const clipBase = closest.name.replace(/\.webm$/, '');
+      for (const target of [closest.name, `${clipBase}_result.json`]) {
+        try {
+          fs.unlinkSync(path.join(CAPTURE_FOLDER, target));
+          deleted += 1;
+        } catch (error) {
+          if (error.code !== 'ENOENT') failed += 1;
+        }
+      }
+    }
+  }
+
+  return { deleted, failed, reel: true };
+}
+
 function triggerReelGeneration(jobId, emotion, context, preset) {
   const job = jobs[jobId];
   if (!job || job.status === 'cancelled') return;
 
-  // Cancel any other running job — only one reel generates at a time.
   if (activeJobId && activeJobId !== jobId && jobs[activeJobId] &&
       ['processing_emotion', 'processing_reel'].includes(jobs[activeJobId].status)) {
     cancelJob(activeJobId, 'Superseded by newer job');
@@ -224,6 +308,37 @@ app.post('/jobs/:id/cancel', (req, res) => {
   if (!job) return res.status(404).json({ error: 'Job not found' });
   cancelJob(req.params.id, 'Cancelled via API');
   res.json({ status: 'cancelled', job_id: req.params.id });
+});
+
+app.get('/saved-data/reels', (_req, res) => {
+  try {
+    res.json({ reels: listReels() });
+  } catch (error) {
+    console.error(`[server] Failed to list saved reels: ${error.message}`);
+    res.status(500).json({ error: 'Could not list saved reels.' });
+  }
+});
+
+app.delete('/saved-data/reels/:filename', (req, res) => {
+  const filename = path.basename(req.params.filename);
+  if (!/^mindstream_.+\.mp4$/.test(filename)) {
+    return res.status(400).json({ error: 'Invalid reel filename.' });
+  }
+
+  try {
+    const result = deleteReel(filename);
+    if (!result.reel) {
+      return res.status(404).json({ error: 'Reel not found.' });
+    }
+    res.status(result.failed ? 207 : 200).json({
+      status: result.failed ? 'partially_deleted' : 'deleted',
+      deleted: result.deleted,
+      failed: result.failed,
+    });
+  } catch (error) {
+    console.error(`[server] Failed to delete reel ${filename}: ${error.message}`);
+    res.status(500).json({ error: 'Could not delete the reel.' });
+  }
 });
 
 app.get('/health', (req, res) => {

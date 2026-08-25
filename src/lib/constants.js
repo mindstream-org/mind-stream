@@ -73,6 +73,8 @@ export const API_ROUTES = {
   CHECK_IN: `${API_BASE}/check-in`,
   JOB_STATUS: (jobId) => `${API_BASE}/jobs/${jobId}`,
   CANCEL_JOB: (jobId) => `${API_BASE}/jobs/${jobId}/cancel`,
+  SAVED_REELS: `${API_BASE}/saved-data/reels`,
+  SAVED_REEL: (filename) => `${API_BASE}/saved-data/reels/${encodeURIComponent(filename)}`,
   HEALTH: `${API_BASE}/health`,
 };
 

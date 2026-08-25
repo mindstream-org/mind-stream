@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import PanelShell from "../components/layout/PanelShell.jsx";
 import IdleState from "./states/IdleState.jsx";
 import PendingState from "./states/PendingState.jsx";
@@ -6,10 +6,11 @@ import ReadyState from "./states/ReadyState.jsx";
 import PlayerState from "./states/PlayerState.jsx";
 import ErrorState from "./states/ErrorState.jsx";
 import OnboardingState from "./states/OnboardingState.jsx";
+import ReelCollection from "../components/ui/ReelCollection.jsx";
 import { useCycleStatus } from "../hooks/useCycleStatus.js";
 import { useSettings } from "../hooks/useSettings.js";
 import { closeSidePanel, sendMessage } from "../lib/chromeApi.js";
-import { CYCLE_STATUS, PANEL_STATE, MESSAGE_TYPES } from "../lib/constants.js";
+import { API_ROUTES, CYCLE_STATUS, PANEL_STATE, MESSAGE_TYPES } from "../lib/constants.js";
 
 export default function SidePanel() {
   const { cycle, setCycle, loaded: cycleLoaded } = useCycleStatus();
@@ -17,6 +18,27 @@ export default function SidePanel() {
   const [playing, setPlaying] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
   const [onboardingStep, setOnboardingStep] = useState(1);
+  const [isCollectionOpen, setIsCollectionOpen] = useState(false);
+  const [reelCount, setReelCount] = useState(0);
+  const [reelRefreshTick, setReelRefreshTick] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const response = await fetch(API_ROUTES.SAVED_REELS);
+        const payload = await response.json().catch(() => ({}));
+        if (active) {
+          setReelCount(response.ok && Array.isArray(payload.reels) ? payload.reels.length : 0);
+        }
+      } catch {
+        if (active) setReelCount(0);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [reelRefreshTick]);
 
   const isPending = cycle.cycle_status === CYCLE_STATUS.PENDING;
 
@@ -59,6 +81,11 @@ export default function SidePanel() {
     sendMessage({ type: MESSAGE_TYPES.CANCEL_GENERATION });
   };
 
+  const handleCloseCollection = () => {
+    setIsCollectionOpen(false);
+    setReelRefreshTick((tick) => tick + 1);
+  };
+
   // chrome.storage resolves after React's first commit, so anything rendered
   // before it lands is a guess. Hold the empty shell until the state is real.
   if (!settingsLoaded || !cycleLoaded) {
@@ -87,10 +114,19 @@ export default function SidePanel() {
   else if (cycle.cycle_status === CYCLE_STATUS.READY) panelState = playing ? PANEL_STATE.PLAYER : PANEL_STATE.READY;
   else if (isPending) panelState = PANEL_STATE.PENDING;
 
+  if (isCollectionOpen) {
+    return <ReelCollection onClose={handleCloseCollection} />;
+  }
+
   return (
     <PanelShell state={panelState}>
       {panelState === PANEL_STATE.IDLE && (
-        <IdleState onAccept={handleAcceptCheckIn} onDismiss={handleDismissPrompt} />
+        <IdleState
+          onAccept={handleAcceptCheckIn}
+          onDismiss={handleDismissPrompt}
+          reelCount={reelCount}
+          onOpenCollection={() => setIsCollectionOpen(true)}
+        />
       )}
       {panelState === PANEL_STATE.PENDING && (
         <PendingState

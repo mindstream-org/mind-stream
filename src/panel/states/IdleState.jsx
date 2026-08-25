@@ -8,7 +8,7 @@ const FLOW = [
   { Icon: Play, label: "Reset", note: "short reel" },
 ];
 
-export default function IdleState({ onAccept, onDismiss }) {
+export default function IdleState({ onAccept, onDismiss, reelCount = 0, onOpenCollection }) {
   return (
     <div className="flex flex-col h-full justify-between animate-fadein py-4 px-2">
       <div className="flex-1 flex flex-col items-center justify-center text-center gap-7">
@@ -58,13 +58,24 @@ k          variant="primary"
           />
         </Button>
 
-        <div className="flex items-center justify-center text-xs font-medium text-fg-subtle">
+        <div className="flex items-center justify-center gap-3 text-xs font-medium text-fg-subtle">
           <button
             onClick={onDismiss}
             className="py-1 transition-colors hover:text-fg cursor-pointer"
           >
             Not right now
           </button>
+          {reelCount > 0 && (
+            <>
+              <span className="h-3 w-px bg-border" aria-hidden="true" />
+              <button
+                onClick={onOpenCollection}
+                className="py-1 transition-colors hover:text-fg cursor-pointer"
+              >
+                Saved reels ({reelCount})
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>
