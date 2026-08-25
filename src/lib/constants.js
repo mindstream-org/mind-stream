@@ -78,14 +78,13 @@ export const API_ROUTES = {
 // Clips are saved to ~/Downloads/mindstream_captures/ via chrome.downloads.
 export const CAPTURE_FOLDER = "mindstream_captures";
 
-// 8 FER+ class labels, passed as-is to Phase 3 (reel_generator.py).
-export const EMOTION_CATEGORIES = [
-  "angry",
-  "contempt",
-  "disgust",
-  "fear",
-  "happy",
-  "neutral",
-  "sad",
-  "surprise",
-];
+export const EMOTION_TONE = {
+  happy: "Uplifting",
+  sad: "Calming",
+  angry: "Grounding",
+  fear: "Soothing",
+  disgust: "Resetting",
+  surprise: "Centering",
+  neutral: "Balancing",
+  contempt: "Reframing",
+};

@@ -6,7 +6,6 @@ import ReadyState from "./states/ReadyState.jsx";
 import PlayerState from "./states/PlayerState.jsx";
 import ErrorState from "./states/ErrorState.jsx";
 import OnboardingState from "./states/OnboardingState.jsx";
-import OnboardingComplete from "./states/OnboardingComplete.jsx";
 import { useCycleStatus } from "../hooks/useCycleStatus.js";
 import { useSettings } from "../hooks/useSettings.js";
 import { closeSidePanel, sendMessage } from "../lib/chromeApi.js";
@@ -36,18 +35,7 @@ export default function SidePanel() {
 
   const handlePlay = () => setPlaying(true);
 
-  const handleDone = () => {
-    setPlaying(false);
-    setCycle({
-      cycle_status: CYCLE_STATUS.IDLE,
-      job_id: null,
-      clip_path: null,
-      reel_url: null,
-      emotion_label: null,
-    });
-  };
-
-  const handleDismissReel = () => {
+  const handleEndCycle = () => {
     setPlaying(false);
     setCycle({
       cycle_status: CYCLE_STATUS.IDLE,
@@ -71,7 +59,6 @@ export default function SidePanel() {
     sendMessage({ type: MESSAGE_TYPES.CANCEL_GENERATION });
   };
 
-  // Render onboarding wizard for first-time users
   if (settingsLoaded && !settings.onboarding_complete) {
     return (
       <PanelShell
@@ -88,17 +75,6 @@ export default function SidePanel() {
     );
   }
 
-  // One-time transition screen after onboarding completes
-  if (settingsLoaded && settings.onboarding_complete && !settings.onboarding_transition_shown) {
-    return (
-      <PanelShell state={PANEL_STATE.IDLE}>
-        <OnboardingComplete
-          onContinue={() => updateSettings({ onboarding_transition_shown: true })}
-        />
-      </PanelShell>
-    );
-  }
-
   let panelState = PANEL_STATE.IDLE;
   if (cycle.cycle_status === CYCLE_STATUS.FAILED) panelState = PANEL_STATE.ERROR;
   else if (cycle.cycle_status === CYCLE_STATUS.READY) panelState = playing ? PANEL_STATE.PLAYER : PANEL_STATE.READY;
@@ -106,15 +82,25 @@ export default function SidePanel() {
 
   return (
     <PanelShell state={panelState}>
-      {panelState === PANEL_STATE.IDLE && <IdleState onAccept={handleAcceptCheckIn} onDismiss={handleDismissPrompt} />}
+      {panelState === PANEL_STATE.IDLE && (
+        <IdleState onAccept={handleAcceptCheckIn} onDismiss={handleDismissPrompt} />
+      )}
       {panelState === PANEL_STATE.PENDING && (
-        <PendingState hasJobId={!!cycle.job_id} hasClipSaved={!!cycle.clip_path} onCancel={handleCancelGeneration} />
+        <PendingState
+          generating={!!(cycle.job_id || cycle.clip_path)}
+          onCancel={handleCancelGeneration}
+        />
       )}
       {panelState === PANEL_STATE.READY && (
-        <ReadyState emotionLabel={cycle.emotion_label ?? "neutral"} onPlay={handlePlay} onDismiss={handleDismissReel} />
+        <ReadyState
+          emotionLabel={cycle.emotion_label ?? "neutral"}
+          reelUrl={cycle.reel_url}
+          onPlay={handlePlay}
+          onDismiss={handleEndCycle}
+        />
       )}
       {panelState === PANEL_STATE.PLAYER && (
-        <PlayerState reelUrl={cycle.reel_url} onDone={handleDone} />
+        <PlayerState reelUrl={cycle.reel_url} onDone={handleEndCycle} />
       )}
       {panelState === PANEL_STATE.ERROR && (
         <ErrorState message={cycle.error_message} onRetry={handleRetry} onDismiss={handleDismissError} />

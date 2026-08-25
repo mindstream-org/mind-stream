@@ -5,11 +5,8 @@ export default function ErrorState({ message, onRetry, onDismiss }) {
 
   return (
     <div className="flex flex-col h-full animate-fadein">
-      <p className="font-mono text-[10px] uppercase tracking-widest text-fg-subtle mb-4 mt-1">
-        Error
-      </p>
-      <h1 className="text-[20px] font-semibold leading-snug tracking-[-0.025em] mb-2">
-        Didn't come together.
+      <h1 className="text-[20px] font-semibold leading-snug tracking-[-0.025em] mb-2 mt-1">
+        Something went wrong.
       </h1>
       <p className="text-[13px] text-fg-muted leading-relaxed mb-5">
         {message && !isBackendError
