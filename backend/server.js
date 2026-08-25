@@ -52,7 +52,7 @@ function cancelJob(jobId, reason = 'Job cancelled') {
   console.log(`[server] Cancelling job ${jobId}: ${reason}`);
 
   if (job.process) {
-    try { job.process.kill('SIGTERM'); } catch (_) {}
+    try { job.process.kill('SIGTERM'); } catch { /* already exited */ }
     job.process = null;
   }
 
