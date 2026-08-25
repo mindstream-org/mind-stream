@@ -12,7 +12,7 @@ import { closeSidePanel, sendMessage } from "../lib/chromeApi.js";
 import { CYCLE_STATUS, PANEL_STATE, MESSAGE_TYPES } from "../lib/constants.js";
 
 export default function SidePanel() {
-  const { cycle, setCycle } = useCycleStatus();
+  const { cycle, setCycle, loaded: cycleLoaded } = useCycleStatus();
   const { settings, updateSettings, loaded: settingsLoaded } = useSettings();
   const [playing, setPlaying] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
@@ -59,7 +59,13 @@ export default function SidePanel() {
     sendMessage({ type: MESSAGE_TYPES.CANCEL_GENERATION });
   };
 
-  if (settingsLoaded && !settings.onboarding_complete) {
+  // chrome.storage resolves after React's first commit, so anything rendered
+  // before it lands is a guess. Hold the empty shell until the state is real.
+  if (!settingsLoaded || !cycleLoaded) {
+    return <PanelShell state={PANEL_STATE.IDLE} />;
+  }
+
+  if (!settings.onboarding_complete) {
     return (
       <PanelShell
         state={PANEL_STATE.IDLE}
@@ -69,7 +75,8 @@ export default function SidePanel() {
           settings={settings}
           updateSettings={updateSettings}
           onComplete={() => updateSettings({ onboarding_complete: true })}
-          onStepChange={setOnboardingStep}
+          step={onboardingStep}
+          setStep={setOnboardingStep}
         />
       </PanelShell>
     );

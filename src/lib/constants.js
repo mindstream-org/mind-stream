@@ -32,7 +32,7 @@ export const GENERATION_PRESETS = {
 
 export const DEFAULT_SETTINGS = {
   preset: GENERATION_PRESETS.NORMAL,
-  user_name: "Friend",
+  user_name: "friend",
   onboarding_complete: false,
 };
 
@@ -62,6 +62,7 @@ export const NOTIFICATION_IDS = {
 
 export const CAPTURE_DURATION_MS = 3000;
 export const COUNTDOWN_SECONDS = 4;
+export const LOGO_MORPH = { duration: 0.3, ease: "easeOut" };
 export const PULSE_THRESHOLD_MINUTES = 25;
 // chrome.alarms enforces a minimum repeat period of ~1 minute.
 export const JOB_POLL_INTERVAL_MINUTES = 1;

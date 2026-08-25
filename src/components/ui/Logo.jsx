@@ -1,4 +1,5 @@
 import { motion } from "motion/react";
+import { LOGO_MORPH } from "../../lib/constants.js";
 
 export default function Logo({ size = "medium", layoutId, className = "" }) {
   const sizeClasses = {
@@ -9,6 +10,7 @@ export default function Logo({ size = "medium", layoutId, className = "" }) {
   return (
     <motion.img
       layoutId={layoutId}
+      transition={LOGO_MORPH}
       src="/assets/logo.png"
       alt="MindStream"
       className={`select-none ${sizeClasses[size]} ${className}`}
